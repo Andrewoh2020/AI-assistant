@@ -16,7 +16,7 @@ export interface ChatRow {
 }
 
 export type MessagePart =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; citations?: number[] }
   | { type: "reasoning"; text: string }
   | { type: "card"; card: unknown }
   | { type: "artifact_ref"; artifactId: string }
@@ -83,4 +83,7 @@ export interface SourceRow {
   content_hash: string | null;
   origin: "search" | "fetch" | "browse";
   injection_flag: boolean;
+  ref_number: number | null;
+  site_name: string | null;
+  published_at: Date | null;
 }
