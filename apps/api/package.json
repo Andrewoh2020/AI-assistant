@@ -1,0 +1,17 @@
+{
+  "name": "@ai-assistant/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --watch dist/server.js",
+    "start": "node dist/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-assistant/db": "workspace:*",
+    "fastify": "^5.12.7"
+  }
+}
