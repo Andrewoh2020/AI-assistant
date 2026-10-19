@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Testing on Your Computer</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --surface: #f5f6f8;
+        --text: #16181d;
+        --muted: #5a606b;
+        --border: #dfe2e7;
+        --accent: #0066cc;
+        --code-bg: #eef1f5;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111316;
+          --surface: #1a1d22;
+          --text: #eceef1;
+          --muted: #a3a9b3;
+          --border: #2c3038;
+          --accent: #4da3ff;
+          --code-bg: #22262d;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1 {
+        font-size: 28px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 20px;
+        margin: 36px 0 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+      }
+      .lead,
+      .muted {
+        color: var(--muted);
+      }
+      a {
+        color: var(--accent);
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 14px;
+        background: var(--code-bg);
+        border-radius: 6px;
+      }
+      code {
+        padding: 1px 5px;
+      }
+      pre {
+        padding: 12px 14px;
+        overflow-x: auto;
+        white-space: pre;
+      }
+      ol li,
+      ul li {
+        margin: 6px 0;
+      }
+      .box {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin: 16px 0;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 15px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Testing the assistant on your computer</h1>
+      <p class="lead">
+        Reviews happen here, on your own machine, so nothing is deployed to Vercel for each change.
+        Steps are for a Mac; Windows differences are noted.
+      </p>
+
+      <div class="box">
+        <strong>Once:</strong> sections 1 to 4 (about 20 minutes).<br />
+        <strong>Every review after that:</strong> section 5 only (two clicks and one command).
+      </div>
+
+      <h2>1. Install three free apps</h2>
+      <ol>
+        <li>
+          <strong>Node.js 22</strong> (runs the code): download the “22 LTS” installer from
+          <a href="https://nodejs.org/en/download">nodejs.org</a> and run it.
+        </li>
+        <li>
+          <strong>Postgres.app</strong> (the database, on your computer only): download from
+          <a href="https://postgresapp.com">postgresapp.com</a>, drag it to Applications, open it
+          and click <em>Initialize</em>. It stays running in the menu bar.<br />
+          <span class="muted"
+            >Windows: install PostgreSQL 16 from postgresql.org and remember the password you
+            choose.</span
+          >
+        </li>
+        <li>
+          <strong>GitHub Desktop</strong> (gets the code and updates it):
+          <a href="https://desktop.github.com">desktop.github.com</a>. Sign in with your GitHub
+          account.
+        </li>
+      </ol>
+      <p>
+        Then open the <strong>Terminal</strong> app (press ⌘ Space, type “Terminal”) and run this
+        once. It turns on <code>pnpm</code>, the tool that installs the project’s parts. It asks
+        for your Mac password; nothing shows while you type it.
+      </p>
+      <pre>sudo corepack enable pnpm</pre>
+
+      <h2>2. Make the database</h2>
+      <p>
+        In Postgres.app, double-click the database named <code>postgres</code>. A Terminal window
+        opens. Type this and press Return, then close that window:
+      </p>
+      <pre>CREATE DATABASE ai_assistant;</pre>
+
+      <h2>3. Get the code</h2>
+      <ol>
+        <li>
+          In GitHub Desktop: <em>File → Clone Repository</em>, pick
+          <code>Andrewoh2020/AI-assistant</code>, keep the suggested folder, click
+          <em>Clone</em>.
+        </li>
+        <li>
+          At the top, click <em>Current Branch</em> and choose the branch of the pull request you
+          are reviewing (for the first one: <code>claude/initial-build-1ovsu4</code>).
+        </li>
+        <li>
+          Choose <em>Repository → Open in Terminal</em>. Run the remaining commands in that
+          window.
+        </li>
+      </ol>
+
+      <h2>4. Add your settings</h2>
+      <p>This makes a private settings file (it is never uploaded to GitHub) and opens it:</p>
+      <pre>cp .env.example .env
+open -e .env</pre>
+      <p>Fill in these lines, save, and close TextEdit:</p>
+      <table>
+        <tr>
+          <th>Line</th>
+          <th>What to put</th>
+        </tr>
+        <tr>
+          <td><code>DATABASE_URL</code></td>
+          <td>
+            <code>postgres://localhost:5432/ai_assistant</code><br />
+            <span class="muted"
+              >Windows:
+              <code>postgres://postgres:YOUR-PASSWORD@localhost:5432/ai_assistant</code></span
+            >
+          </td>
+        </tr>
+        <tr>
+          <td><code>TRAVILA_API_KEY</code></td>
+          <td>Your Travila secret key (from the Travila dashboard).</td>
+        </tr>
+        <tr>
+          <td><code>DEEPSEEK_API_KEY</code></td>
+          <td>Your DeepSeek key (from platform.deepseek.com).</td>
+        </tr>
+        <tr>
+          <td><code>SIGNUP_CODE</code></td>
+          <td>Any word you like. You type it once to create your account.</td>
+        </tr>
+      </table>
+      <p class="muted">
+        Leave everything else empty. <code>SESSION_SECRET</code> is only needed on the hosted
+        site.
+      </p>
+
+      <h2>5. Start it (every review)</h2>
+      <ol>
+        <li>
+          In GitHub Desktop, pick the review’s branch under <em>Current Branch</em>, then click
+          <em>Fetch origin</em> and <em>Pull origin</em> if it offers.
+        </li>
+        <li>In the Terminal window, run:</li>
+      </ol>
+      <pre>pnpm install
+pnpm local</pre>
+      <p class="muted">
+        The very first time, it may ask to download pnpm. Type <code>Y</code> and press Return.
+      </p>
+      <p>
+        <code>pnpm local</code> builds everything, updates your database to the newest design, and
+        starts the site. When you see <code>Ready</code>, open
+        <a href="http://localhost:3000">http://localhost:3000</a>. The first time, choose
+        <em>Create an account</em> and use your <code>SIGNUP_CODE</code>.
+      </p>
+      <p>
+        To stop it, click the Terminal window and press <strong>Control C</strong>. Your chats stay
+        in your local database for next time.
+      </p>
+
+      <h2>What to try for the first review</h2>
+      <ul>
+        <li>Ask something recent, like “Who won the 2026 World Cup final?”</li>
+        <li>
+          While it works you see what it is doing (“Searching…”, “Reading 3 pages…”) and a
+          <em>Stop</em> button.
+        </li>
+        <li>
+          The answer has small numbered chips. Clicking one highlights that source on the right;
+          each source opens the real page.
+        </li>
+        <li>“How I worked this out” folds out the assistant’s reasoning.</li>
+        <li>
+          Start a <em>New side chat</em>, switch your Mac to dark mode, and make the window
+          narrow like a phone.
+        </li>
+      </ul>
+
+      <h2>If something goes wrong</h2>
+      <table>
+        <tr>
+          <th>You see</th>
+          <th>Do this</th>
+        </tr>
+        <tr>
+          <td><code>command not found: pnpm</code></td>
+          <td>Run <code>sudo corepack enable pnpm</code> again, then open a new Terminal window.</td>
+        </tr>
+        <tr>
+          <td><code>ECONNREFUSED</code> or “database does not exist”</td>
+          <td>Open Postgres.app (it must be running) and redo section 2.</td>
+        </tr>
+        <tr>
+          <td><code>Port 3000 is in use</code></td>
+          <td>Another copy is still running. Close the old Terminal window and try again.</td>
+        </tr>
+        <tr>
+          <td>“That invite code isn’t right.”</td>
+          <td>Check <code>SIGNUP_CODE</code> in <code>.env</code>, then stop and start again.</td>
+        </tr>
+        <tr>
+          <td>A question ends with “Failed”</td>
+          <td>
+            Usually a key. Check <code>TRAVILA_API_KEY</code> and <code>DEEPSEEK_API_KEY</code>
+            in <code>.env</code>; the Terminal window shows the exact error.
+          </td>
+        </tr>
+      </table>
+
+      <h2>The hosted site, for later</h2>
+      <p>
+        A Vercel project (<code>ai-assistant</code>) and its own Neon database exist, separate
+        from your other apps. Pushing to GitHub does not deploy it, so it costs nothing until we
+        decide to deploy. The first deploy sets up its database on its own. Your local database
+        and the hosted one never share data.
+      </p>
+    </main>
+  </body>
+</html>

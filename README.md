@@ -19,23 +19,30 @@ build order.
 
 ## Run it on a computer
 
-Needs Node 22, pnpm 10 and Postgres 16.
+Step-by-step guide for reviews: [`docs/local-testing.html`](docs/local-testing.html). In short,
+with Node 22 and Postgres 16 installed and an empty `ai_assistant` database:
 
 ```sh
 pnpm install
-cp .env.example .env          # then fill in the values
-pnpm build
-pnpm db:migrate               # creates the tables
-pnpm --filter @ai-assistant/api start   # backend on http://localhost:4000
-pnpm --filter @ai-assistant/web start   # website on http://localhost:3000
+cp .env.example .env          # then fill in DATABASE_URL, the two keys and SIGNUP_CODE
+pnpm local                    # builds, applies migrations, starts http://localhost:3000
 ```
 
+The website runs the backend inside itself (`apps/web/app/api`), so one command starts both.
 Open http://localhost:3000, choose "Create an account" and use the invite code from
 `SIGNUP_CODE`. `/design` shows the colors and type.
 
 In the cloud development environment the vendor keys come from network secrets instead of `.env`;
-start the backend with `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` so its
-requests go through that proxy.
+start with `NODE_USE_ENV_PROXY=1 NODE_EXTRA_CA_CERTS=/root/.ccr/ca-bundle.crt` so requests go
+through that proxy.
+
+## Hosting
+
+Vercel project `ai-assistant` (root `apps/web`) with its own Neon database. Pushes to GitHub do
+not deploy (`apps/web/vercel.json`); reviews are tested locally. A production deploy applies
+migrations during the build (`scripts/migrate-on-deploy.mjs`); preview deploys never touch the
+database. The hosted site needs `SESSION_SECRET`, `SIGNUP_CODE`, `TRAVILA_API_KEY` and
+`DEEPSEEK_API_KEY` in the Vercel project settings.
 
 ## How a question is answered
 

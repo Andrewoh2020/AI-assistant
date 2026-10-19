@@ -8,6 +8,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm -r --parallel dev",
+    "start": "pnpm --filter @ai-assistant/web start",
+    "local": "pnpm build && pnpm db:migrate && pnpm start",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "format": "prettier --write .",
