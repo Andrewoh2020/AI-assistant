@@ -1,13 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  connect,
-  migrateDown,
-  migrateUp,
-  appliedVersions,
-  loadMigrations,
-  signIn,
-  withUser,
-} from "./index.js";
+import { connect, signIn, withUser } from "./index.js";
+import { appliedVersions, loadMigrations, migrateDown, migrateUp } from "./migrate.js";
 
 // Needs a disposable Postgres: DATABASE_URL=postgres://postgres:postgres@localhost:5432/ai_assistant_test
 const url = process.env.DATABASE_URL;

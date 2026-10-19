@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Sql } from "postgres";
 
-const MIGRATIONS_DIR = fileURLToPath(new URL("../migrations/", import.meta.url));
+// Built from the module's own path (not `new URL("../migrations/", ...)`) so bundlers that
+// include this package don't try to bundle the SQL folder.
+const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations") + "/";
 
 export interface Migration {
   version: string;

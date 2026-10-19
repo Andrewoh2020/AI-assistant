@@ -1,9 +1,15 @@
 // Usage: node dist/cli.js up | down [steps|all] | status
+// Uses the direct (unpooled) connection when one is configured, as Neon recommends for migrations.
+import { existsSync } from "node:fs";
 import { connect } from "./client.js";
 import { appliedVersions, loadMigrations, migrateDown, migrateUp } from "./migrate.js";
 
+// Settings live in one .env file at the top of the repository. Values already set win.
+const rootEnv = new URL("../../../.env", import.meta.url);
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
+
 const [cmd = "status", arg] = process.argv.slice(2);
-const sql = connect();
+const sql = connect(process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL, { max: 1 });
 try {
   if (cmd === "up") {
     const applied = await migrateUp(sql);

@@ -2,9 +2,11 @@ import postgres, { type Sql, type TransactionSql } from "postgres";
 
 export type { Sql, TransactionSql };
 
-export function connect(url = process.env.DATABASE_URL): Sql {
+export function connect(url = process.env.DATABASE_URL, { max = 10 }: { max?: number } = {}): Sql {
   if (!url) throw new Error("DATABASE_URL is not set");
-  return postgres(url, { max: 10, onnotice: () => {} });
+  // Neon's pooled endpoint (PgBouncer, transaction mode) can't keep prepared statements.
+  const pooled = /-pooler\./.test(url);
+  return postgres(url, { max, prepare: !pooled, onnotice: () => {} });
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

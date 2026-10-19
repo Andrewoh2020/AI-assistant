@@ -12,9 +12,12 @@ export interface Config {
 }
 
 export function loadConfig(env = process.env): Config {
+  // On Vercel (the hosted site) we insist on a real secret and https-only cookies. On a computer
+  // (localhost, plain http) neither is needed, so local testing works with no extra setup.
+  const hosted = !!env.VERCEL;
   const sessionSecret = env.SESSION_SECRET ?? "";
-  if (env.NODE_ENV === "production" && sessionSecret.length < 32) {
-    throw new Error("SESSION_SECRET must be at least 32 characters in production");
+  if (hosted && sessionSecret.length < 32) {
+    throw new Error("SESSION_SECRET must be at least 32 characters on the hosted site");
   }
   return {
     databaseUrl: env.DATABASE_URL ?? "",
@@ -24,6 +27,6 @@ export function loadConfig(env = process.env): Config {
     deepseekKey: env.DEEPSEEK_API_KEY ?? "",
     sessionSecret: sessionSecret || "dev-only-session-secret-change-me-0000",
     signupCode: env.SIGNUP_CODE ?? "",
-    secureCookies: env.NODE_ENV === "production",
+    secureCookies: hosted,
   };
 }

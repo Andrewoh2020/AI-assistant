@@ -1,5 +1,6 @@
 // Test helpers: a disposable database, a scripted fake of Travila and a fake search engine.
-import { connect, migrateUp, type Sql } from "@ai-assistant/db";
+import { connect, type Sql } from "@ai-assistant/db";
+import { migrateUp } from "@ai-assistant/db/migrate";
 import type { FetchedPage, SearchBackend, SearchResult } from "./search.js";
 import type {
   CreateThreadInput,
