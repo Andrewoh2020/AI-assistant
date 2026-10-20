@@ -13,6 +13,7 @@ import {
 } from "./auth.js";
 import { cleanFileName } from "./files.js";
 import { extractText } from "./extract.js";
+import { jobTitle } from "./browser.js";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -179,5 +180,15 @@ describe("sealed secrets and file names", () => {
     expect(cleanFileName("C:\\Users\\me\\report.pdf")).toBe("report.pdf");
     expect(cleanFileName(".hidden")).toBe("hidden");
     expect(cleanFileName("")).toBe("file");
+  });
+});
+
+describe("browser job names", () => {
+  it("uses the assistant's short name, or the task's first words", () => {
+    expect(jobTitle("  Check   GitHub notifications ", "x")).toBe("Check GitHub notifications");
+    expect(jobTitle(undefined, "find the cheapest flight to Tokyo next week.")).toBe(
+      "Find the cheapest flight to",
+    );
+    expect(jobTitle("", "")).toBe("Browser task");
   });
 });

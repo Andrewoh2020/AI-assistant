@@ -42,6 +42,8 @@ const START_TIMEOUT_MS = 90 * 1000;
 const WAIT_FOR_USER_MS = 15 * 60 * 1000;
 const MAX_OUTPUT_FILES = 10;
 const REPORT_CHAR_LIMIT = 8000;
+/** How often the card's picture of the page is refreshed while the browser works. */
+const PICTURE_GAP_MS = 12 * 1000;
 
 const ACTIVE = ["starting", "running", "needs_user", "user_control"] as const;
 
@@ -108,13 +110,14 @@ export async function startBrowse(
   const task = String(args.task).trim();
   const url = typeof args.url === "string" && args.url ? args.url : null;
   const fileIds = Array.isArray(args.file_ids) ? (args.file_ids as string[]) : [];
+  const title = jobTitle(args.title, task);
   const [session] = await withUser(
     deps.sql,
     ctx.userId,
     (tx) => tx<BrowserSessionRow[]>`
-      INSERT INTO browser_sessions (user_id, run_id, tool_call_id, status, task, step)
+      INSERT INTO browser_sessions (user_id, run_id, tool_call_id, status, task, step, title)
       VALUES (${ctx.userId}, ${ctx.runId}, ${toolCallId}, 'starting',
-              ${url ? `${task}\n\nStart at: ${url}` : task}, 'Opening the browser')
+              ${url ? `${task}\n\nStart at: ${url}` : task}, 'Opening the browser', ${title})
       ON CONFLICT (tool_call_id) DO NOTHING RETURNING *`,
   );
   if (!session) return;
@@ -178,7 +181,8 @@ export async function startBrowse(
         bu_session_id: run.sessionId,
         bu_profile_id: profileId,
         bu_workspace_id: workspaceId,
-        outputs_before: JSON.stringify(before),
+        // As a JSON object (a JSON string here would be stored as one string, not an object).
+        outputs_before: deps.sql.json(before),
         events_after: 0,
       },
       ["starting"],
@@ -191,6 +195,46 @@ export async function startBrowse(
         `The browser couldn't start. ${err instanceof Error ? err.message.slice(0, 200) : ""}`.trim(),
       finished_at: new Date(),
     });
+  }
+}
+
+/** The assistant's short name for the job, or the task's first words when it gave none. */
+export function jobTitle(given: unknown, task: string): string {
+  const name = typeof given === "string" ? given.replace(/\s+/g, " ").trim() : "";
+  if (name) return name.slice(0, 80);
+  const words = task.replace(/\s+/g, " ").trim().split(" ").slice(0, 5).join(" ");
+  const short = words.replace(/[.,;:!?]+$/, "");
+  return short ? short[0]!.toUpperCase() + short.slice(1, 80) : "Browser task";
+}
+
+/**
+ * Takes a picture of the page the browser is showing, for the card and for after it closes,
+ * and notes its tabs. Best effort: a browser that has just closed simply keeps its last picture.
+ */
+async function takePicture(deps: BrowserDeps, ctx: BrowseContext, s: BrowserSessionRow) {
+  if (!s.bu_browser_id) return;
+  try {
+    const shot = await deps.browser.capture(s.bu_browser_id);
+    if (!shot) return;
+    const file = await saveFile(deps.sql, ctx.userId, {
+      kind: "generated",
+      name: "browser.jpg",
+      mime: "image/jpeg",
+      data: shot.jpeg,
+      runId: ctx.runId,
+    });
+    await withUser(deps.sql, ctx.userId, async (tx) => {
+      const [old] = await tx<{ screenshot_file_id: string | null }[]>`
+        SELECT screenshot_file_id FROM browser_sessions WHERE id = ${s.id} FOR UPDATE`;
+      await tx`UPDATE browser_sessions
+               SET screenshot_file_id = ${file.id}, screenshot_at = now(),
+                   tabs = ${tx.json(shot.tabs as unknown as Parameters<typeof tx.json>[0])}
+               WHERE id = ${s.id}`;
+      if (old?.screenshot_file_id) await tx`DELETE FROM files WHERE id = ${old.screenshot_file_id}`;
+    });
+  } catch (err) {
+    // Never log the error's details: they could carry the browser's address.
+    console.error(`browse ${s.id}: no picture of the page (${(err as Error).name})`);
   }
 }
 
@@ -320,11 +364,18 @@ export async function advanceBrowse(
   if (!s) return null;
   if (!isActive(s)) return resultFor(s);
 
-  const fail = async (error: string) => {
-    await stopQuietly(deps, s);
-    const row = await update(deps, ctx, s.id, { status: "failed", error, finished_at: now }, [
-      s.status,
-    ]);
+  // The freshest copy of the session, for the picture (it needs the browser's id).
+  let latest = s;
+  const fail = async (error: string, extra: Record<string, unknown> = {}) => {
+    await takePicture(deps, ctx, latest);
+    await stopQuietly(deps, latest);
+    const row = await update(
+      deps,
+      ctx,
+      s.id,
+      { status: "failed", error, finished_at: now, ...extra },
+      [latest.status],
+    );
     return row ? resultFor(row) : null;
   };
 
@@ -355,7 +406,15 @@ export async function advanceBrowse(
   if (seen.step) progress.step = seen.step;
   // Null when the person took over meanwhile; their take-over wins.
   const current = await update(deps, ctx, s.id, progress, ["running"]);
-  if (!current || !isTerminal(status)) return null;
+  if (!current) return null;
+  latest = current;
+  if (!isTerminal(status)) {
+    const age = current.screenshot_at
+      ? now.getTime() - new Date(current.screenshot_at).getTime()
+      : Infinity;
+    if (age >= PICTURE_GAP_MS) await takePicture(deps, ctx, current);
+    return null;
+  }
 
   if (status !== "completed") {
     const run = await deps.browser.getRun(s.bu_run_id!).catch(() => null);
@@ -368,8 +427,13 @@ export async function advanceBrowse(
 
   const run = await deps.browser.getRun(s.bu_run_id!);
   const report = (run.result ?? "").trim();
+  if (report.startsWith("BLOCKED:")) {
+    const why = report.slice("BLOCKED:".length).trim().split("\n")[0]!.slice(0, 200);
+    return fail(`The website blocked the browser${why ? `: ${why}` : "."}`, { blocked: true });
+  }
   if (report.startsWith("NEEDS_USER:")) {
     const ask = report.slice("NEEDS_USER:".length).trim().split("\n")[0]!.slice(0, 300);
+    await takePicture(deps, ctx, current);
     await update(
       deps,
       ctx,
@@ -381,6 +445,7 @@ export async function advanceBrowse(
   }
 
   const files = await copyOutputs(deps, ctx, current);
+  await takePicture(deps, ctx, current);
   await stopQuietly(deps, { ...current, status: "done" });
   const task = current.task ?? "";
   const startUrl = task && /^Start at: (\S+)$/m.exec(task)?.[1];
@@ -512,30 +577,76 @@ export async function stopBrowsing(deps: BrowserDeps, ctx: BrowseContext) {
   }
 }
 
-/** What the website shows while a run is browsing. Only ever sent to the session's owner. */
-export async function browserViewFor(
-  deps: BrowserDeps,
-  ctx: BrowseContext,
-): Promise<BrowserView | null> {
-  const [s] = await withUser(
-    deps.sql,
-    ctx.userId,
+/** Every browser job in these runs, oldest first, by run. Only ever sent to their owner. */
+export async function browserViewsFor(
+  sql: Sql,
+  userId: string,
+  runIds: string[],
+  secret: string,
+): Promise<Map<string, BrowserView[]>> {
+  const out = new Map<string, BrowserView[]>();
+  if (!runIds.length) return out;
+  const rows = await withUser(
+    sql,
+    userId,
     (tx) => tx<BrowserSessionRow[]>`
-      SELECT * FROM browser_sessions WHERE run_id = ${ctx.runId} AND status = ANY(${[...ACTIVE]})
-      ORDER BY created_at DESC LIMIT 1`,
+      SELECT * FROM browser_sessions WHERE run_id = ANY(${runIds}) ORDER BY created_at`,
   );
-  return s ? viewOf(s, deps.secret) : null;
+  for (const row of rows) {
+    const list = out.get(row.run_id!) ?? [];
+    list.push(viewOf(row, secret));
+    out.set(row.run_id!, list);
+  }
+  return out;
+}
+
+/** The status in Muse's words. */
+export function labelFor(s: BrowserSessionRow): string {
+  switch (s.status) {
+    case "starting":
+      return "Working on it";
+    case "running":
+      return "Browsing";
+    case "needs_user":
+      return "Sign-in needed";
+    case "user_control":
+      return "You're in control";
+    case "done":
+      return "Done";
+    case "stopped":
+      return "Stopped";
+    default:
+      return s.blocked ? "Site blocked" : "Couldn't finish";
+  }
+}
+
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u.hostname.replace(/^www\./, "") : null;
+  } catch {
+    return null;
+  }
 }
 
 export function viewOf(s: BrowserSessionRow, secret: string): BrowserView {
+  const active = isActive(s);
+  const tabs = (Array.isArray(s.tabs) ? s.tabs : []).filter((t) => t.url !== "about:blank");
+  const startUrl = s.task ? /^Start at: (\S+)$/m.exec(s.task)?.[1] : null;
   return {
     id: s.id,
-    status: (isActive(s) ? s.status : "running") as BrowserView["status"],
-    step: s.step,
-    needsUser: s.needs_user,
+    status: s.status,
+    label: labelFor(s),
+    title: s.title ?? jobTitle(null, (s.task ?? "").split("\n")[0] ?? ""),
+    site: hostOf(tabs.find((t) => t.active)?.url) ?? hostOf(startUrl),
+    tabs,
+    step: active ? s.step : null,
+    needsUser: s.status === "needs_user" ? s.needs_user : null,
     liveUrl:
-      isActive(s) && s.live_view_url_ciphertext
-        ? openSecret(s.live_view_url_ciphertext, secret)
-        : null,
+      active && s.live_view_url_ciphertext ? openSecret(s.live_view_url_ciphertext, secret) : null,
+    screenshotId: s.screenshot_file_id,
+    closed: !active,
+    failed: s.status === "failed" || s.status === "stopped",
   };
 }

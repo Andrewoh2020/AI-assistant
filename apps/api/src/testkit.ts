@@ -336,4 +336,19 @@ export class FakeBrowserUse implements BrowserUse {
     const [, workspaceId, ...rest] = url.replace("fake://", "/").split("/");
     return this.workspaces.get(workspaceId!)!.get(rest.join("/"))!.data;
   }
+
+  /** Pictures taken, by browser id. A stopped browser gives none, like the real one. */
+  captures: string[] = [];
+
+  async capture(browserId: string) {
+    if (this.stopped.includes(browserId)) return null;
+    this.captures.push(browserId);
+    return {
+      jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+      tabs: [
+        { url: "about:blank", title: "about:blank", active: false },
+        { url: "https://www.example.com/page", title: "Example page", active: true },
+      ],
+    };
+  }
 }
