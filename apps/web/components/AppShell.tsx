@@ -321,10 +321,15 @@ export function AppShell({ chatId }: { chatId: string }) {
       depth++;
       setDragging(true);
     };
+    const clear = () => {
+      depth = 0;
+      setDragging(false);
+    };
     const onLeave = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       depth = Math.max(0, depth - 1);
-      if (depth === 0) setDragging(false);
+      // No relatedTarget means the drag left the window (or was cancelled).
+      if (depth === 0 || !e.relatedTarget) clear();
     };
     const onOver = (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -335,15 +340,17 @@ export function AppShell({ chatId }: { chatId: string }) {
     const onDrop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      depth = 0;
-      setDragging(false);
+      clear();
       void attachRef.current(e.dataTransfer?.files ?? null);
     };
     window.addEventListener("dragenter", onEnter);
     window.addEventListener("dragleave", onLeave);
     window.addEventListener("dragover", onOver);
     window.addEventListener("drop", onDrop);
+    // The pointer moving normally again means any drag is over, whatever events were missed.
+    window.addEventListener("pointermove", clear);
     return () => {
+      window.removeEventListener("pointermove", clear);
       window.removeEventListener("dragenter", onEnter);
       window.removeEventListener("dragleave", onLeave);
       window.removeEventListener("dragover", onOver);
