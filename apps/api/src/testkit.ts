@@ -1,6 +1,14 @@
 // Test helpers: a disposable database, a scripted fake of Travila and a fake search engine.
 import { connect, type Sql } from "@ai-assistant/db";
 import { migrateUp } from "@ai-assistant/db/migrate";
+import type {
+  BrowserUse,
+  BuEvent,
+  BuFile,
+  BuRun,
+  BuRunStatus,
+  CreateRunInput,
+} from "./browseruse.js";
 import type { FetchedPage, SearchBackend, SearchResult } from "./search.js";
 import type {
   CreateThreadInput,
@@ -79,6 +87,14 @@ export class FakeTravila implements Travila {
       script: [],
     });
     return id;
+  }
+
+  configUpdates: { threadId: string; input: CreateThreadInput }[] = [];
+
+  async updateThreadConfig(userId: string, threadId: string, input: CreateThreadInput) {
+    const t = this.thread(userId, threadId);
+    t.input = input;
+    this.configUpdates.push({ threadId, input });
   }
 
   async sendMessage(userId: string, threadId: string, text: string) {
@@ -181,5 +197,143 @@ export class FakeSearch implements SearchBackend {
     const page = this.pages.get(url);
     if (!page) throw new Error("404");
     return page;
+  }
+}
+
+interface FakeBrowseScript {
+  /** How many status checks say "running" before the run ends. */
+  polls?: number;
+  status?: "completed" | "failed";
+  result?: string;
+  /** Files the agent "saves" into outputs/. */
+  outputs?: { name: string; data: string }[];
+}
+
+/** A scripted Browser Use: each run plays the next script. Files live in memory. */
+export class FakeBrowserUse implements BrowserUse {
+  scripts: FakeBrowseScript[] = [];
+  runs = new Map<
+    string,
+    {
+      input: CreateRunInput;
+      script: FakeBrowseScript;
+      checks: number;
+      cancelled: boolean;
+      sessionId: string;
+      workspaceId: string;
+    }
+  >();
+  workspaces = new Map<string, Map<string, { data: Uint8Array; lastModified: string }>>();
+  profiles: { name: string; userId: string; id: string }[] = [];
+  stopped: string[] = [];
+  private clock = 0;
+
+  async createProfile(name: string, userId: string) {
+    const id = crypto.randomUUID();
+    this.profiles.push({ name, userId, id });
+    return id;
+  }
+
+  async createWorkspace() {
+    const id = crypto.randomUUID();
+    this.workspaces.set(id, new Map());
+    return id;
+  }
+
+  private put(workspaceId: string, path: string, data: Uint8Array) {
+    this.workspaces.get(workspaceId)!.set(path, {
+      data,
+      lastModified: new Date(Date.UTC(2026, 0, 1, 0, 0, ++this.clock)).toISOString(),
+    });
+  }
+
+  async upload(workspaceId: string, file: { name: string; data: Uint8Array }) {
+    const path = `uploads/${file.name}`;
+    this.put(workspaceId, path, new Uint8Array(file.data));
+    return path;
+  }
+
+  async createRun(input: CreateRunInput) {
+    const id = crypto.randomUUID();
+    const previous = input.sessionId
+      ? [...this.runs.values()].find((r) => r.sessionId === input.sessionId)
+      : undefined;
+    const sessionId = input.sessionId ?? crypto.randomUUID();
+    const workspaceId =
+      input.workspaceId ?? previous?.workspaceId ?? (await this.createWorkspace());
+    const script = this.scripts.shift() ?? { result: "Done." };
+    this.runs.set(id, { input, script, checks: 0, cancelled: false, sessionId, workspaceId });
+    return { id, sessionId, workspaceId };
+  }
+
+  async runStatus(runId: string): Promise<BuRunStatus> {
+    const run = this.runs.get(runId)!;
+    if (run.cancelled) return "cancelled";
+    if (run.checks++ < (run.script.polls ?? 0)) return "running";
+    const status = run.script.status ?? "completed";
+    if (status === "completed" && run.script.outputs) {
+      for (const o of run.script.outputs) {
+        this.put(run.workspaceId, `outputs/${o.name}`, new TextEncoder().encode(o.data));
+      }
+      run.script.outputs = undefined;
+    }
+    return status;
+  }
+
+  async getRun(runId: string): Promise<BuRun> {
+    const run = this.runs.get(runId)!;
+    return {
+      id: runId,
+      status: run.cancelled ? "cancelled" : (run.script.status ?? "completed"),
+      sessionId: run.sessionId,
+      workspaceId: run.workspaceId,
+      result: run.script.status === "failed" ? null : (run.script.result ?? "Done."),
+      error: run.script.status === "failed" ? "agent crashed" : null,
+      totalCostUsd: "0.01",
+    };
+  }
+
+  async runEvents(runId: string, after: number) {
+    const run = this.runs.get(runId)!;
+    const events: BuEvent[] = [
+      {
+        id: 1,
+        type: "browser.ready",
+        data: {
+          live_view_url: `https://live.example/${run.sessionId}`,
+          browser_session_id: `browser-${run.sessionId}`,
+        },
+      },
+      {
+        id: 2,
+        type: "core.event",
+        data: { part: { type: "text", text: "Opening the page now." } },
+      },
+    ].filter((e) => e.id > after);
+    return { events, nextAfter: events.at(-1)?.id ?? after, hasMore: false };
+  }
+
+  async cancelRun(runId: string) {
+    this.runs.get(runId)!.cancelled = true;
+  }
+
+  async stopBrowser(browserId: string) {
+    this.stopped.push(browserId);
+  }
+
+  async listFiles(workspaceId: string, prefix: string, urls: boolean): Promise<BuFile[]> {
+    return [...(this.workspaces.get(workspaceId) ?? new Map()).entries()]
+      .filter(([path]) => path.startsWith(prefix))
+      .map(([path, f]) => ({
+        path,
+        size: f.data.byteLength,
+        lastModified: f.lastModified,
+        url: urls ? `fake://${workspaceId}/${path}` : null,
+      }));
+  }
+
+  async download(url: string) {
+    const [, workspaceId, ...rest] = url.replace("fake://", "/").split("/");
+    return this.workspaces.get(workspaceId!)!.get(rest.join("/"))!.data;
   }
 }

@@ -16,12 +16,33 @@ export interface SourceView {
   flagged: boolean;
 }
 
+export interface FileView {
+  id: string;
+  name: string;
+  mime: string;
+  bytes: number;
+  /** "upload": the person attached it. "download": the browser got it for them. */
+  kind: "upload" | "download";
+}
+
+/** A browser the assistant is using right now. Only ever sent to its owner. */
+export interface BrowserView {
+  id: string;
+  /** needs_user: the agent asked the person to do something. user_control: they took over. */
+  status: "starting" | "running" | "needs_user" | "user_control";
+  step: string | null;
+  needsUser: string | null;
+  /** The live browser. Works like a password while the browser is open; never share it. */
+  liveUrl: string | null;
+}
+
 export interface MessageView {
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   reasoning: string | null;
   sources: SourceView[];
+  files: FileView[];
   createdAt: string;
   runId: string | null;
   clientMessageId: string | null;
@@ -34,6 +55,7 @@ export interface RunView {
   statusLine: string | null;
   error: string | null;
   message: MessageView | null;
+  browser: BrowserView | null;
 }
 
 export interface ChatSummary {
@@ -105,10 +127,33 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
         activeRun: RunView | null;
         endedRuns: RunView[];
       }>("GET", `/chats/${id}`),
-    sendMessage: (chatId: string, input: { text: string; clientMessageId: string }) =>
-      call<{ message: MessageView; run: RunView }>("POST", `/chats/${chatId}/messages`, input),
+    sendMessage: (
+      chatId: string,
+      input: { text: string; clientMessageId: string; fileIds?: string[] },
+    ) => call<{ message: MessageView; run: RunView }>("POST", `/chats/${chatId}/messages`, input),
     pollRun: (id: string) => call<{ run: RunView }>("GET", `/runs/${id}`),
     stopRun: (id: string) => call<{ run: RunView }>("POST", `/runs/${id}/stop`, {}),
+    /** Sends the file's bytes as they are; the name travels in a header. */
+    uploadFile: async (file: Blob & { name: string }, chatId?: string) => {
+      const q = chatId ? `?chatId=${encodeURIComponent(chatId)}` : "";
+      const res = await fetchImpl(`${baseUrl}/files${q}`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-File-Name": encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; file?: FileView };
+      if (!res.ok) throw new ApiError(res.status, data.error ?? `Upload failed (${res.status})`);
+      return data as { file: FileView };
+    },
+    fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
+    takeOverBrowser: (id: string) =>
+      call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/take-over`, {}),
+    handBackBrowser: (id: string) =>
+      call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/hand-back`, {}),
   };
 }
 

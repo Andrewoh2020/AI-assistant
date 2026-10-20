@@ -5,6 +5,9 @@ export interface Config {
   travilaKey: string;
   deepseekBase: string;
   deepseekKey: string;
+  browserUseBase: string;
+  /** Empty in the cloud environment, where the network proxy adds the key. */
+  browserUseKey: string;
   sessionSecret: string;
   /** People need this code to create an account. Empty disables sign-up. */
   signupCode: string;
@@ -25,6 +28,8 @@ export function loadConfig(env = process.env): Config {
     travilaKey: env.TRAVILA_API_KEY ?? "",
     deepseekBase: env.DEEPSEEK_API_BASE ?? "https://api.deepseek.com",
     deepseekKey: env.DEEPSEEK_API_KEY ?? "",
+    browserUseBase: env.BROWSER_USE_API_BASE ?? "https://api.browser-use.com",
+    browserUseKey: env.BROWSER_USE_API_KEY ?? "",
     sessionSecret: sessionSecret || "dev-only-session-secret-change-me-0000",
     signupCode: env.SIGNUP_CODE ?? "",
     secureCookies: hosted,

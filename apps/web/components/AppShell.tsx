@@ -4,6 +4,7 @@ import {
   ApiError,
   TERMINAL_STATUSES,
   type ChatSummary,
+  type FileView,
   type Me,
   type MessageView,
   type RunView,
@@ -21,6 +22,8 @@ import {
 import { api } from "@/lib/client";
 import { usePref } from "@/lib/prefs";
 import { Answer } from "./Answer";
+import { BrowserCard } from "./BrowserCard";
+import { FileChip, FileList, PaperclipIcon } from "./Files";
 import { Menu, MenuItem } from "./Menu";
 
 const POLL_MS = 1500;
@@ -36,6 +39,10 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Files attached to the message being written (already uploaded).
+  const [attachments, setAttachments] = useState<FileView[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [navOpen, setNavOpen] = useState(false);
   // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's menu
   // button opens it over the chat and it closes after you pick one.
@@ -147,19 +154,43 @@ export function AppShell({ chatId }: { chatId: string }) {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, activeRunId, endedRuns.length]);
 
-  async function send(text: string) {
+  async function send(text: string, files: FileView[] = attachments) {
     const trimmed = text.trim();
-    if (!trimmed || activeRunId) return;
+    if (!trimmed || activeRunId || uploading) return;
     setSendError(null);
     const clientMessageId = crypto.randomUUID();
     try {
-      const res = await api.sendMessage(chatId, { text: trimmed, clientMessageId });
+      const res = await api.sendMessage(chatId, {
+        text: trimmed,
+        clientMessageId,
+        fileIds: files.map((f) => f.id),
+      });
       setDraft("");
+      setAttachments([]);
       setMessages((prev) => [...prev, res.message]);
       if (TERMINAL_STATUSES.has(res.run.status)) setEndedRuns((prev) => [...prev, res.run]);
       else setActiveRun(res.run);
     } catch (err) {
       if (!handleAuth(err)) setSendError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function attach(list: FileList | null) {
+    const picked = [...(list ?? [])];
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (!picked.length) return;
+    setSendError(null);
+    setUploading((n) => n + picked.length);
+    for (const file of picked) {
+      try {
+        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} is over 20 MB.`);
+        const { file: uploaded } = await api.uploadFile(file, chatId);
+        setAttachments((prev) => [...prev, uploaded].slice(0, 10));
+      } catch (err) {
+        if (!handleAuth(err)) setSendError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setUploading((n) => n - 1);
+      }
     }
   }
 
@@ -410,7 +441,10 @@ export function AppShell({ chatId }: { chatId: string }) {
                   aria-label={m.role === "user" ? "You" : "Assistant"}
                 >
                   {m.role === "user" ? (
-                    <p className="user-text">{m.text}</p>
+                    <div className="user-turn">
+                      <p className="user-text">{m.text}</p>
+                      <FileList files={m.files} />
+                    </div>
                   ) : (
                     <Answer
                       message={m}
@@ -431,7 +465,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                       <button
                         className="btn btn-ghost btn-small"
                         type="button"
-                        onClick={() => send(m.text)}
+                        onClick={() => send(m.text, m.files)}
                         disabled={working}
                       >
                         Try again
@@ -442,6 +476,14 @@ export function AppShell({ chatId }: { chatId: string }) {
               </div>
             );
           })}
+          {working && activeRun?.browser && (
+            <BrowserCard
+              browser={activeRun.browser}
+              onChange={(view) =>
+                setActiveRun((run) => (run && run.browser ? { ...run, browser: view } : run))
+              }
+            />
+          )}
           {working && (
             <div className="progress" role="status">
               <span className="dots" aria-hidden="true" />
@@ -457,7 +499,36 @@ export function AppShell({ chatId }: { chatId: string }) {
               {sendError}
             </p>
           )}
+          {(attachments.length > 0 || uploading > 0) && (
+            <div className="composer-files">
+              {attachments.map((f) => (
+                <FileChip
+                  key={f.id}
+                  file={f}
+                  onRemove={() => setAttachments((prev) => prev.filter((x) => x.id !== f.id))}
+                />
+              ))}
+              {uploading > 0 && <span className="file-chip file-chip-busy">Uploading…</span>}
+            </div>
+          )}
           <div className="composer-box">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(e) => void attach(e.target.files)}
+            />
+            <button
+              type="button"
+              className="attach-btn"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Attach files"
+              title="Attach files"
+              disabled={attachments.length >= 10}
+            >
+              <PaperclipIcon />
+            </button>
             <label className="sr-only" htmlFor="composer-input">
               Message
             </label>
@@ -476,9 +547,9 @@ export function AppShell({ chatId }: { chatId: string }) {
               </button>
             ) : (
               <button
-                className={`send-btn ${draft.trim() ? "is-active" : ""}`}
+                className={`send-btn ${draft.trim() && !uploading ? "is-active" : ""}`}
                 type="submit"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || uploading > 0}
                 aria-label="Send"
               >
                 <ArrowUpIcon />

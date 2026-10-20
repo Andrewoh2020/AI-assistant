@@ -3,6 +3,7 @@
 import type { MessageView, SourceView } from "@ai-assistant/api-client";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { FileList } from "./Files";
 
 /** Turns [n] markers into links the renderer draws as citation chips. Unknown numbers stay out. */
 function linkCitations(text: string, sources: SourceView[]): string {
@@ -52,6 +53,8 @@ export function Answer({
           {linkCitations(message.text, message.sources)}
         </ReactMarkdown>
       </div>
+
+      <FileList files={message.files} />
 
       {message.sources.length > 0 && <SourcesList message={message} highlight={highlight} />}
 

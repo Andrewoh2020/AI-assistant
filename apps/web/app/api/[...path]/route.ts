@@ -13,7 +13,11 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   req.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.text();
+  // Raw bytes, so file uploads arrive unchanged.
+  const body =
+    req.method === "GET" || req.method === "HEAD"
+      ? undefined
+      : Buffer.from(await req.arrayBuffer());
   const res = await app.inject({
     method: req.method as "GET" | "POST" | "PATCH",
     url: "/" + path.map(encodeURIComponent).join("/") + req.nextUrl.search,

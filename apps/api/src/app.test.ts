@@ -2,11 +2,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Sql } from "@ai-assistant/db";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
+import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 
 let sql: Sql | null = null;
 let travila: FakeTravila;
 let search: FakeSearch;
+let browser: FakeBrowserUse;
 let pending: Promise<unknown>[] = [];
 let app: ReturnType<typeof buildApp>;
 
@@ -21,6 +22,7 @@ afterAll(async () => {
 beforeEach(() => {
   travila = new FakeTravila();
   search = new FakeSearch();
+  browser = new FakeBrowserUse();
   pending = [];
   if (sql)
     app = buildApp({
@@ -28,6 +30,8 @@ beforeEach(() => {
       sql,
       travila,
       search,
+      browser,
+      browserCheckGapMs: 0,
       defer: (p) => pending.push(p),
       // Every test hostname resolves to a public address.
       resolve: async () => ["93.184.216.34"],
@@ -57,6 +61,26 @@ async function mainChatId(cookie: string): Promise<string> {
   return res.json().chats.find((c: { kind: string }) => c.kind === "main").id;
 }
 
+/** Polls until `until` holds for the run, letting background tool work finish between polls. */
+async function pollUntil(cookie: string, runId: string, until: (run: any) => boolean) {
+  for (let i = 0; i < 30; i++) {
+    const res = await app.inject({ method: "GET", url: `/runs/${runId}`, headers: { cookie } });
+    await Promise.all(pending.splice(0));
+    const run = res.json().run;
+    if (until(run)) return run;
+  }
+  throw new Error("the run never got there");
+}
+
+async function upload(cookie: string, name: string, type: string, data: Buffer) {
+  return app.inject({
+    method: "POST",
+    url: "/files",
+    headers: { cookie, "content-type": type, "x-file-name": encodeURIComponent(name) },
+    payload: data,
+  });
+}
+
 /** Polls the run like the browser does, letting background tool work finish between polls. */
 async function pollUntilDone(cookie: string, runId: string) {
   for (let i = 0; i < 20; i++) {
@@ -73,12 +97,13 @@ async function ask(
   chatId: string,
   text: string,
   clientMessageId = crypto.randomUUID(),
+  fileIds?: string[],
 ) {
   return app.inject({
     method: "POST",
     url: `/chats/${chatId}/messages`,
     headers: { cookie },
-    payload: { text, clientMessageId },
+    payload: { text, clientMessageId, fileIds },
   });
 }
 
@@ -356,5 +381,252 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
 
     expect((await patch(b, id, { archived: true })).statusCode).toBe(403);
     expect((await patch(a, await mainChatId(a), { archived: true })).statusCode).toBe(409);
+  });
+  it("answers from a JavaScript-only page through the browser, in the user's own profile", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    const url = "https://quotes.toscrape.com/js/";
+    browser.scripts.push({ polls: 1, result: "The first quote is by Albert Einstein." });
+    travila.scripts.push([
+      { tools: [{ name: "browse", args: { task: "Read the first quote and its author.", url } }] },
+      { answer: "It's a quote by Albert Einstein [1]." },
+    ]);
+    const sent = await ask(cookie, chat, "What's the first quote on that page?");
+    const runId = sent.json().run.id;
+
+    const seen = await pollUntil(cookie, runId, (r) => r.browser?.liveUrl);
+    expect(seen.status).toBe("awaiting_tools");
+    expect(seen.statusLine).toBe("Using the browser");
+    expect(seen.browser.liveUrl).toMatch(/^https:\/\/live\.example\//);
+
+    const run = await pollUntilDone(cookie, runId);
+    expect(run.status).toBe("completed");
+    expect(run.browser).toBeNull();
+    expect(run.message.text).toBe("It's a quote by Albert Einstein [1].");
+    expect(run.message.sources.map((x: { url: string }) => x.url)).toEqual([url]);
+
+    // The agent got its rules, the task and the page; one profile was made for this user.
+    const [bu] = [...browser.runs.values()];
+    expect(bu!.input.task).toContain("Never buy or pay for anything");
+    expect(bu!.input.task).toContain("Read the first quote and its author.");
+    expect(bu!.input.task).toContain(`Start at: ${url}`);
+    expect(bu!.input.maxCostUsd).toBeLessThanOrEqual(0.5);
+    expect(browser.profiles).toHaveLength(1);
+    expect(bu!.input.profileId).toBe(browser.profiles[0]!.id);
+    // The report went back fenced as untrusted, with a citation number; the browser was closed.
+    const result = travila.submitted[0]!.results[0]!.resultJson as { report: string; n: number };
+    expect(result.report).toContain("BEGIN EXTERNAL CONTENT");
+    expect(result.report).toContain("Albert Einstein");
+    expect(result.n).toBe(1);
+    expect(browser.stopped).toHaveLength(1);
+
+    // The live link is stored sealed, never in plain text.
+    const [row] = await sql!`SELECT live_view_url_ciphertext FROM browser_sessions
+                             WHERE run_id = ${runId}`;
+    expect(row!.live_view_url_ciphertext).not.toContain("live.example");
+  });
+
+  it("takes an uploaded PDF to the browser and keeps the original and the browser's file downloadable", async () => {
+    const a = await signUp();
+    const b = await signUp();
+    const chat = await mainChatId(a);
+    const pdf = Buffer.concat([
+      Buffer.from("%PDF-1.4\n"),
+      Buffer.alloc(3000, 7),
+      Buffer.from("\n%%EOF"),
+    ]);
+    const up = await upload(a, "Q3 report.pdf", "application/pdf", pdf);
+    expect(up.statusCode).toBe(200);
+    const file = up.json().file;
+    expect(file).toMatchObject({
+      name: "Q3 report.pdf",
+      mime: "application/pdf",
+      bytes: pdf.length,
+    });
+
+    // Nobody else can use or download it.
+    expect((await ask(b, await mainChatId(b), "mine now", undefined, [file.id])).statusCode).toBe(
+      403,
+    );
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/files/${file.id}/download`,
+          headers: { cookie: b },
+        })
+      ).statusCode,
+    ).toBe(403);
+
+    browser.scripts.push({
+      result: "Uploaded the PDF to the converter and saved the result.",
+      outputs: [{ name: "Q3 report.txt", data: "Revenue went up." }],
+    });
+    travila.scripts.push([
+      {
+        tools: [
+          { name: "browse", args: { task: "Convert the PDF to text.", file_ids: [file.id] } },
+        ],
+      },
+      { answer: "Done: I converted it. The text file is attached." },
+    ]);
+    const sent = await ask(a, chat, "Convert this PDF to text", undefined, [file.id]);
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json().message.files.map((f: { name: string }) => f.name)).toEqual([
+      "Q3 report.pdf",
+    ]);
+    const run = await pollUntilDone(a, sent.json().run.id);
+    expect(run.status).toBe("completed");
+
+    // The model was told about the file, and the browser got the exact bytes.
+    const thread = [...travila.threads.values()].at(-1)!;
+    expect(thread.history[0]!.content![0]!.content).toContain(`file_id: ${file.id}`);
+    const [bu] = [...browser.runs.values()];
+    expect(bu!.input.task).toContain("uploads/Q3 report.pdf");
+    const stored = browser.workspaces.get(bu!.workspaceId)!.get("uploads/Q3 report.pdf")!;
+    expect(Buffer.from(stored.data).equals(pdf)).toBe(true);
+
+    // The browser's file is copied to us and shows on the answer; the original is unchanged.
+    expect(run.message.files.map((f: { name: string; kind: string }) => [f.name, f.kind])).toEqual([
+      ["Q3 report.txt", "download"],
+    ]);
+    const out = await app.inject({
+      method: "GET",
+      url: `/files/${run.message.files[0].id}/download`,
+      headers: { cookie: a },
+    });
+    expect(out.body).toBe("Revenue went up.");
+    const original = await app.inject({
+      method: "GET",
+      url: `/files/${file.id}/download`,
+      headers: { cookie: a },
+    });
+    expect(original.statusCode).toBe(200);
+    expect(original.rawPayload.equals(pdf)).toBe(true);
+    expect(original.headers["content-disposition"]).toContain("attachment");
+    expect(original.headers["content-type"]).toBe("application/pdf");
+
+    // After a reload the chat still shows both files.
+    const reloaded = (
+      await app.inject({ method: "GET", url: `/chats/${chat}`, headers: { cookie: a } })
+    ).json();
+    expect(reloaded.messages.map((m: { files: unknown[] }) => m.files.length)).toEqual([1, 1]);
+  });
+
+  it("shows the live browser only to its owner; take-over pauses the agent and hand-back resumes it", async () => {
+    const a = await signUp();
+    const b = await signUp();
+    const chat = await mainChatId(a);
+    browser.scripts.push({ polls: 1000 }, { polls: 1, result: "Finished after the hand-back." });
+    travila.scripts.push([
+      { tools: [{ name: "browse", args: { task: "Check the order status." } }] },
+      { answer: "Your order has shipped." },
+    ]);
+    const runId = (await ask(a, chat, "Check my order")).json().run.id;
+    const seen = await pollUntil(a, runId, (r) => r.browser?.liveUrl);
+    const sessionId = seen.browser.id;
+
+    // User B can't see the run (and so the live link) or control the browser.
+    for (const req of [
+      { method: "GET" as const, url: `/runs/${runId}` },
+      { method: "POST" as const, url: `/browser-sessions/${sessionId}/take-over` },
+      { method: "POST" as const, url: `/browser-sessions/${sessionId}/hand-back` },
+    ]) {
+      const res = await app.inject({ ...req, headers: { cookie: b } });
+      expect(res.statusCode).toBe(403);
+      expect(res.body).not.toContain("live.example");
+    }
+
+    const took = await app.inject({
+      method: "POST",
+      url: `/browser-sessions/${sessionId}/take-over`,
+      headers: { cookie: a },
+    });
+    expect(took.json().browser.status).toBe("user_control");
+    const [first, second] = [...browser.runs.values()];
+    expect(first!.cancelled).toBe(true);
+    expect(second).toBeUndefined();
+    // While the person has it, the run waits; nothing goes back to the model.
+    const waiting = await pollUntil(a, runId, (r) => r.browser?.status === "user_control");
+    expect(waiting.status).toBe("awaiting_tools");
+    expect(travila.submitted).toHaveLength(0);
+
+    const back = await app.inject({
+      method: "POST",
+      url: `/browser-sessions/${sessionId}/hand-back`,
+      headers: { cookie: a },
+    });
+    expect(back.json().browser.status).toBe("running");
+    const followUp = [...browser.runs.values()][1]!;
+    expect(followUp.input.sessionId).toBe(first!.sessionId);
+    expect(followUp.input.task).toContain("handed it back");
+
+    const run = await pollUntilDone(a, runId);
+    expect(run.status).toBe("completed");
+    const result = travila.submitted[0]!.results[0]!.resultJson as { report: string };
+    expect(result.report).toContain("Finished after the hand-back.");
+  });
+
+  it("lets the browser agent ask the person to sign in, then carries on", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    browser.scripts.push(
+      { result: "NEEDS_USER: Please sign in to example.com, then hand the browser back." },
+      { result: "Signed in and found 3 unread messages." },
+    );
+    travila.scripts.push([
+      { tools: [{ name: "browse", args: { task: "Count my unread messages on example.com." } }] },
+      { answer: "You have 3 unread messages." },
+    ]);
+    const runId = (await ask(cookie, chat, "How many unread messages do I have?")).json().run.id;
+    const asking = await pollUntil(cookie, runId, (r) => r.browser?.status === "needs_user");
+    expect(asking.browser.needsUser).toBe(
+      "Please sign in to example.com, then hand the browser back.",
+    );
+    expect(asking.browser.liveUrl).toBeTruthy();
+
+    await app.inject({
+      method: "POST",
+      url: `/browser-sessions/${asking.browser.id}/take-over`,
+      headers: { cookie },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/browser-sessions/${asking.browser.id}/hand-back`,
+      headers: { cookie },
+    });
+    const run = await pollUntilDone(cookie, runId);
+    expect(run.message.text).toBe("You have 3 unread messages.");
+  });
+
+  it("Stop closes the browser too", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    browser.scripts.push({ polls: 1000 });
+    travila.scripts.push([{ tools: [{ name: "browse", args: { task: "Something slow." } }] }]);
+    const runId = (await ask(cookie, chat, "Do something slow")).json().run.id;
+    await pollUntil(cookie, runId, (r) => r.browser?.liveUrl);
+    const stopped = await app.inject({
+      method: "POST",
+      url: `/runs/${runId}/stop`,
+      headers: { cookie },
+    });
+    expect(stopped.json().run.status).toBe("cancelled");
+    expect(stopped.json().run.browser).toBeNull();
+    expect([...browser.runs.values()][0]!.cancelled).toBe(true);
+    expect(browser.stopped).toHaveLength(1);
+  });
+
+  it("gives older chats the new tools on their next message", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    await pollUntilDone(cookie, (await ask(cookie, chat, "hi")).json().run.id);
+    expect(travila.configUpdates).toHaveLength(0);
+    await sql!`UPDATE chats SET travila_profile_version = 'main-2026-10-19' WHERE id = ${chat}`;
+    await pollUntilDone(cookie, (await ask(cookie, chat, "hi again")).json().run.id);
+    expect(travila.configUpdates).toHaveLength(1);
+    const update = travila.configUpdates[0]!.input;
+    expect(update.clientTools.map((t) => t.name)).toContain("browse");
+    expect(update.clientToolTimeoutMs).toBeGreaterThan(5 * 60 * 1000);
   });
 });

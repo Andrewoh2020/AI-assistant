@@ -766,3 +766,189 @@ code {
     max-width: 92%;
   }
 }
+
+/* Files on messages and in the message box. */
+.user-turn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 80%;
+}
+.user-turn .user-text {
+  max-width: 100%;
+}
+.file-list,
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.user-turn .file-list {
+  justify-content: flex-end;
+}
+.answer .file-list {
+  margin: 4px 0 8px;
+}
+.composer-files {
+  margin: 0 8px 8px;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 40px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  font-size: var(--type-small-size);
+}
+.file-chip-busy {
+  padding: 0 14px;
+  color: var(--ink-2);
+}
+.file-chip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 12px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.file-chip-link:hover .file-chip-name {
+  text-decoration: underline;
+}
+.file-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+.file-chip-size {
+  color: var(--ink-2);
+  font-size: var(--type-caption-size);
+  flex: none;
+}
+.file-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--ink-2);
+}
+.file-chip-remove {
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 20px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.file-chip-remove:hover {
+  background: var(--selected);
+}
+.attach-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: -12px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.attach-btn:hover {
+  background: var(--selected);
+}
+.attach-btn .nav-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* The live browser card: watch-only until you take over. */
+.browser-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-1);
+  padding: 12px;
+  margin: 0 0 16px;
+  max-width: 100%;
+}
+.browser-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--accent-soft);
+  border-radius: var(--radius-m);
+  padding: 8px 8px 8px 14px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.browser-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  min-height: 40px;
+}
+.browser-head .nav-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--ink-2);
+}
+.browser-step {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+}
+.browser-frame {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-m);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.browser-frame.is-live {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+.browser-frame iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.browser-frame:not(.is-live) iframe {
+  pointer-events: none;
+}
+.browser-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.browser-note {
+  margin: 8px 2px 0;
+  font-size: var(--type-caption-size);
+  color: var(--ink-2);
+}
+@media (max-width: 719px) {
+  .browser-frame {
+    aspect-ratio: 3 / 4;
+  }
+}
