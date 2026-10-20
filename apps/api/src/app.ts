@@ -18,6 +18,7 @@ import {
   NotFound,
   sendMessage,
   stopRun,
+  updateChat,
   type Deps,
   type Session,
 } from "./orchestrator.js";
@@ -195,6 +196,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     kind: c.kind,
     title: c.title,
     cleanRoom: c.clean_room,
+    pinned: c.pinned,
+    archived: c.archived_at !== null,
     updatedAt: new Date(c.updated_at).toISOString(),
   });
 
@@ -211,6 +214,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const chat = await createSideChat(sql, s, {
       title: typeof b.title === "string" ? b.title : undefined,
       cleanRoom: b.cleanRoom === true,
+    });
+    return { chat: chatSummary(chat) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/chats/:id", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const chat = await updateChat(sql, s, req.params.id, {
+      pinned: typeof b.pinned === "boolean" ? b.pinned : undefined,
+      archived: typeof b.archived === "boolean" ? b.archived : undefined,
     });
     return { chat: chatSummary(chat) };
   });

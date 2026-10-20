@@ -326,4 +326,35 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     );
     expect(chatView.endedRuns[0].status).toBe("cancelled");
   });
+
+  it("pins and archives side chats, never Main, and only the owner's", async () => {
+    const a = await signUp();
+    const b = await signUp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/chats",
+      headers: { cookie: a },
+      payload: { title: "Trip" },
+    });
+    const id = created.json().chat.id;
+    const patch = (cookie: string, chatId: string, payload: object) =>
+      app.inject({ method: "PATCH", url: `/chats/${chatId}`, headers: { cookie }, payload });
+
+    expect((await patch(a, id, { pinned: true })).json().chat).toMatchObject({
+      pinned: true,
+      archived: false,
+    });
+    expect((await patch(a, id, { archived: true })).json().chat).toMatchObject({
+      pinned: true,
+      archived: true,
+    });
+    const list = (await app.inject({ method: "GET", url: "/chats", headers: { cookie: a } }))
+      .json()
+      .chats.find((c: { id: string }) => c.id === id);
+    expect(list.archived).toBe(true);
+    expect((await patch(a, id, { archived: false })).json().chat.archived).toBe(false);
+
+    expect((await patch(b, id, { archived: true })).statusCode).toBe(403);
+    expect((await patch(a, await mainChatId(a), { archived: true })).statusCode).toBe(409);
+  });
 });

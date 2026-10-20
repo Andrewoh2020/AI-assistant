@@ -172,8 +172,32 @@ export async function listChats(sql: Sql, s: Session): Promise<ChatRow[]> {
   return withUser(sql, s.userId, async (tx) => {
     await tx`INSERT INTO chats (user_id, kind, title) VALUES (${s.userId}, 'main', 'Main')
              ON CONFLICT (user_id) WHERE kind = 'main' DO NOTHING`;
-    return tx<ChatRow[]>`SELECT * FROM chats WHERE archived_at IS NULL
-                         ORDER BY (kind = 'main') DESC, updated_at DESC`;
+    // Archived chats are included; the website shows them only when asked to.
+    return tx<ChatRow[]>`SELECT * FROM chats
+                         ORDER BY (kind = 'main') DESC, pinned DESC, updated_at DESC`;
+  });
+}
+
+/** Pins or archives a side chat. Main can't be archived. */
+export async function updateChat(
+  sql: Sql,
+  s: Session,
+  chatId: string,
+  input: { pinned?: boolean; archived?: boolean },
+): Promise<ChatRow> {
+  return withUser(sql, s.userId, async (tx) => {
+    const [chat] = await tx<ChatRow[]>`SELECT * FROM chats WHERE id = ${chatId}`;
+    if (!chat) throw new NotFound();
+    if (chat.kind === "main" && (input.archived || input.pinned !== undefined)) {
+      throw new Conflict("Main chat can't be pinned or archived.");
+    }
+    const pinned = input.pinned ?? chat.pinned;
+    const archived = input.archived === undefined ? chat.archived_at !== null : input.archived;
+    const [updated] = await tx<ChatRow[]>`
+      UPDATE chats SET pinned = ${pinned},
+        archived_at = CASE WHEN ${archived}::boolean THEN coalesce(archived_at, now()) ELSE NULL END
+      WHERE id = ${chatId} RETURNING *`;
+    return updated!;
   });
 }
 

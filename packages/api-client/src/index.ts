@@ -41,6 +41,8 @@ export interface ChatSummary {
   kind: "main" | "side" | "group";
   title: string | null;
   cleanRoom: boolean;
+  pinned: boolean;
+  archived: boolean;
   updatedAt: string;
 }
 
@@ -94,6 +96,8 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     listChats: () => call<{ chats: ChatSummary[] }>("GET", "/chats"),
     createSideChat: (input: { title?: string; cleanRoom?: boolean }) =>
       call<{ chat: ChatSummary }>("POST", "/chats", input),
+    updateChat: (id: string, input: { pinned?: boolean; archived?: boolean }) =>
+      call<{ chat: ChatSummary }>("PATCH", `/chats/${id}`, input),
     getChat: (id: string) =>
       call<{
         chat: ChatSummary;

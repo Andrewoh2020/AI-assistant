@@ -172,6 +172,20 @@ code {
 .shell.sidebar-hidden .sidebar {
   display: none;
 }
+/* "Keep chat panel visible" off: the chat list opens over the chat instead of beside it. */
+.shell.panel-floating {
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  position: relative;
+}
+.shell.panel-floating .sidebar {
+  position: absolute;
+  left: var(--rail-width);
+  top: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  z-index: 6;
+  box-shadow: var(--shadow-2);
+}
 .skip-link {
   position: absolute;
   left: -9999px;
@@ -233,10 +247,20 @@ code {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+  z-index: 3;
+  padding: 10px 12px 0;
+}
+/* The lists scroll; the header stays put so its menu can overlap the chat. */
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 10px 12px 16px;
+  margin: 0 -12px;
+  padding: 0 12px 16px;
 }
 .sidebar-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -303,33 +327,65 @@ code {
 }
 .menu {
   position: absolute;
-  right: 0;
-  top: 38px;
+  left: 0;
+  top: 40px;
   z-index: 20;
-  min-width: 200px;
+  min-width: 250px;
   background: var(--surface);
-  border-radius: var(--radius-m);
+  border-radius: var(--radius-l);
   box-shadow: var(--shadow-2);
   padding: 6px;
 }
+.sidebar-head .more {
+  position: static;
+}
+.sidebar-head .menu {
+  left: 0;
+  top: 46px;
+  min-width: 270px;
+}
+.row-menu .menu {
+  left: auto;
+  right: 0;
+  top: 34px;
+  min-width: 180px;
+}
+.menu-divider {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 6px 12px;
+}
+.menu-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+.menu-icon svg {
+  width: 20px;
+  height: 20px;
+}
 .menu-who {
-  margin: 6px 10px 8px;
+  margin: 6px 12px 4px;
   font-size: var(--type-small-size);
   color: var(--ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .menu-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   width: 100%;
   text-align: left;
   font: inherit;
-  font-size: var(--type-small-size);
+  font-size: var(--type-body-size);
   color: var(--ink);
   background: transparent;
   border: 0;
   border-radius: var(--radius-s);
-  padding: 8px 10px;
+  padding: 10px 12px;
   cursor: pointer;
 }
 .menu-item:hover {
@@ -352,7 +408,38 @@ code {
   margin: 0;
   padding: 0;
 }
+.chat-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-s);
+}
+.chat-row:hover,
+.chat-row.is-current {
+  background: var(--selected);
+}
+.chat-row .row-menu {
+  position: absolute;
+  right: 4px;
+  opacity: 0;
+}
+.chat-row:hover .row-menu,
+.chat-row:focus-within .row-menu,
+.row-menu:has([aria-expanded="true"]) {
+  opacity: 1;
+}
+.pin {
+  display: inline-grid;
+  color: var(--ink-2);
+  margin-right: 6px;
+}
+.pin .nav-icon {
+  width: 14px;
+  height: 14px;
+}
 .chat-list a {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   padding: 8px 10px;
@@ -367,9 +454,7 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-list a:hover,
-.chat-list a.is-current {
-  background: var(--selected);
+.chat-list a:hover {
   text-decoration: none;
 }
 
@@ -633,7 +718,8 @@ code {
 /* Phone and narrow windows: no rail; the chat list becomes a slide-over. */
 @media (max-width: 719px) {
   .shell,
-  .shell.sidebar-hidden {
+  .shell.sidebar-hidden,
+  .shell.panel-floating {
     grid-template-columns: minmax(0, 1fr);
   }
   .rail {
@@ -654,7 +740,8 @@ code {
     display: inline-flex;
   }
   .sidebar,
-  .shell.sidebar-hidden .sidebar {
+  .shell.sidebar-hidden .sidebar,
+  .shell.panel-floating .sidebar {
     display: flex;
     position: fixed;
     inset: 0 auto 0 0;

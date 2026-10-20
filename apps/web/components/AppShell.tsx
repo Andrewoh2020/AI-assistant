@@ -19,7 +19,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import { api } from "@/lib/client";
+import { usePref } from "@/lib/prefs";
 import { Answer } from "./Answer";
+import { Menu, MenuItem } from "./Menu";
 
 const POLL_MS = 1500;
 
@@ -35,10 +37,36 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [navOpen, setNavOpen] = useState(false);
-  const [sidebarHidden, setSidebarHidden] = useState(false);
+  // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's menu
+  // button opens it over the chat and it closes after you pick one.
+  const [keepPanel, setKeepPanel] = usePref("keepChatPanel", true);
+  const [showArchived, setShowArchived] = usePref("showArchivedChats", false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<{ messageId: string; n: number | null } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const panelToggleRef = useRef<HTMLButtonElement>(null);
+
+  // A chat panel opened over the chat closes when you click anywhere else, or press Escape.
+  useEffect(() => {
+    if (!panelOpen || keepPanel) return;
+    const onPointer = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!sidebarRef.current?.contains(t) && !panelToggleRef.current?.contains(t)) {
+        setPanelOpen(false);
+      }
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setPanelOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [panelOpen, keepPanel]);
 
   const handleAuth = useCallback(
     (err: unknown) => {
@@ -156,6 +184,22 @@ export function AppShell({ chatId }: { chatId: string }) {
     }
   }
 
+  async function updateChat(id: string, change: { pinned?: boolean; archived?: boolean }) {
+    try {
+      const { chat: updated } = await api.updateChat(id, change);
+      const { chats: list } = await api.listChats();
+      setChats(list);
+      if (updated.id === chatId) setChat(updated);
+    } catch (err) {
+      handleAuth(err);
+    }
+  }
+
+  function picked() {
+    setNavOpen(false);
+    if (!keepPanel) setPanelOpen(false);
+  }
+
   async function signOut() {
     await api.signOut().catch(() => {});
     router.replace("/sign-in");
@@ -181,18 +225,22 @@ export function AppShell({ chatId }: { chatId: string }) {
   }
 
   const mainChat = chats.find((c) => c.kind === "main");
-  const sideChats = chats.filter((c) => c.kind !== "main");
+  const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
+  const archivedChats = chats.filter((c) => c.archived);
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
   const working = !!activeRunId;
   const isEmpty = messages.length === 0 && !working;
 
   const q = query.trim().toLowerCase();
-  const shownSideChats = q
-    ? sideChats.filter((c) => (c.title || "New side chat").toLowerCase().includes(q))
-    : sideChats;
+  const matches = (c: ChatSummary) => (c.title || "New side chat").toLowerCase().includes(q);
+  const shownSideChats = q ? sideChats.filter(matches) : sideChats;
+  const shownArchived = q ? archivedChats.filter(matches) : archivedChats;
+  const panelShown = keepPanel || panelOpen;
 
   return (
-    <div className={`shell ${navOpen ? "nav-open" : ""} ${sidebarHidden ? "sidebar-hidden" : ""}`}>
+    <div
+      className={`shell ${navOpen ? "nav-open" : ""} ${keepPanel ? "" : "panel-floating"} ${panelShown ? "" : "sidebar-hidden"}`}
+    >
       <a className="skip-link" href="#composer-input">
         Skip to the message box
       </a>
@@ -223,15 +271,16 @@ export function AppShell({ chatId }: { chatId: string }) {
         <button
           className="rail-btn"
           type="button"
-          aria-label={sidebarHidden ? "Show chats" : "Hide chats"}
-          aria-expanded={!sidebarHidden}
-          onClick={() => setSidebarHidden(!sidebarHidden)}
+          ref={panelToggleRef}
+          aria-label={panelShown ? "Hide chats" : "Show chats"}
+          aria-expanded={panelShown}
+          onClick={() => (keepPanel ? setKeepPanel(false) : setPanelOpen(!panelOpen))}
         >
           <MenuIcon />
         </button>
       </nav>
 
-      <nav className="sidebar" aria-label="Chats">
+      <nav className="sidebar" aria-label="Chats" ref={sidebarRef}>
         <div className="sidebar-head">
           <label className="search">
             <SearchIcon />
@@ -243,45 +292,84 @@ export function AppShell({ chatId }: { chatId: string }) {
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <details className="more">
-            <summary className="icon-btn" aria-label="More" title="More">
-              <MoreIcon />
-            </summary>
-            <div className="menu" role="menu">
-              <p className="menu-who">{me?.displayName || me?.email}</p>
-              <button className="menu-item" type="button" role="menuitem" onClick={signOut}>
-                Sign out
-              </button>
-            </div>
-          </details>
+          <Menu label="More" trigger={<MoreIcon />}>
+            {(close) => (
+              <>
+                <MenuItem
+                  checked={keepPanel}
+                  onSelect={() => {
+                    setKeepPanel(!keepPanel);
+                    setPanelOpen(false);
+                    close();
+                  }}
+                >
+                  Keep chat panel visible
+                </MenuItem>
+                <hr className="menu-divider" />
+                <MenuItem
+                  icon={<ArchiveIcon />}
+                  onSelect={() => {
+                    setShowArchived(!showArchived);
+                    close();
+                  }}
+                >
+                  {showArchived ? "Hide archived chats" : "Show archived chats"}
+                </MenuItem>
+                <hr className="menu-divider" />
+                <p className="menu-who">{me?.displayName || me?.email}</p>
+                <MenuItem icon={<SignOutIcon />} onSelect={signOut}>
+                  Sign out
+                </MenuItem>
+              </>
+            )}
+          </Menu>
         </div>
-        <ul className="chat-list">
-          {mainChat && (
-            <li>
-              <ChatLink chat={mainChat} current={chatId} onPick={() => setNavOpen(false)} />
-            </li>
+        <div className="sidebar-scroll">
+          <ul className="chat-list">
+            {mainChat && (
+              <li>
+                <ChatLink chat={mainChat} current={chatId} onPick={picked} />
+              </li>
+            )}
+          </ul>
+          <div className="nav-label">
+            <span>Side chats</span>
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={newSideChat}
+              aria-label="New side chat"
+              title="New side chat"
+            >
+              <PlusIcon />
+            </button>
+          </div>
+          <ul className="chat-list">
+            {shownSideChats.map((c) => (
+              <li key={c.id}>
+                <ChatLink chat={c} current={chatId} onPick={picked} onUpdate={updateChat} />
+              </li>
+            ))}
+            {q && shownSideChats.length === 0 && <li className="muted nav-empty">No matches</li>}
+          </ul>
+          {showArchived && (
+            <>
+              <p className="nav-label">
+                <span>Archived</span>
+              </p>
+              <ul className="chat-list">
+                {shownArchived.map((c) => (
+                  <li key={c.id}>
+                    <ChatLink chat={c} current={chatId} onPick={picked} onUpdate={updateChat} />
+                  </li>
+                ))}
+                {shownArchived.length === 0 && (
+                  <li className="muted nav-empty">No archived chats</li>
+                )}
+              </ul>
+            </>
           )}
-        </ul>
-        <div className="nav-label">
-          <span>Side chats</span>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={newSideChat}
-            aria-label="New side chat"
-            title="New side chat"
-          >
-            <PlusIcon />
-          </button>
         </div>
-        <ul className="chat-list">
-          {shownSideChats.map((c) => (
-            <li key={c.id}>
-              <ChatLink chat={c} current={chatId} onPick={() => setNavOpen(false)} />
-            </li>
-          ))}
-          {q && shownSideChats.length === 0 && <li className="muted nav-empty">No matches</li>}
-        </ul>
       </nav>
 
       <main className="chat">
@@ -407,22 +495,57 @@ function ChatLink({
   chat,
   current,
   onPick,
+  onUpdate,
 }: {
   chat: ChatSummary;
   current: string;
   onPick: () => void;
+  onUpdate?: (id: string, change: { pinned?: boolean; archived?: boolean }) => void;
 }) {
   const isCurrent = chat.id === current;
   const isMain = chat.kind === "main";
+  const name = isMain ? "Main chat" : chat.title || "New side chat";
   return (
-    <Link
-      href={`/chat/${chat.id}`}
-      className={isCurrent ? "is-current" : undefined}
-      aria-current={isCurrent ? "page" : undefined}
-      onClick={onPick}
-    >
-      <span>{isMain ? "Main chat" : chat.title || "New side chat"}</span>
-    </Link>
+    <div className={`chat-row ${isCurrent ? "is-current" : ""}`}>
+      <Link
+        href={`/chat/${chat.id}`}
+        aria-current={isCurrent ? "page" : undefined}
+        onClick={onPick}
+      >
+        {chat.pinned && (
+          <span className="pin" aria-label="Pinned">
+            <PinIcon />
+          </span>
+        )}
+        <span>{name}</span>
+      </Link>
+      {onUpdate && (
+        <Menu label={`Options for ${name}`} trigger={<MoreIcon />} className="row-menu">
+          {(close) => (
+            <>
+              <MenuItem
+                icon={<PinIcon />}
+                onSelect={() => {
+                  onUpdate(chat.id, { pinned: !chat.pinned });
+                  close();
+                }}
+              >
+                {chat.pinned ? "Unpin" : "Pin"}
+              </MenuItem>
+              <MenuItem
+                icon={<ArchiveIcon />}
+                onSelect={() => {
+                  onUpdate(chat.id, { archived: !chat.archived });
+                  close();
+                }}
+              >
+                {chat.archived ? "Unarchive" : "Archive"}
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+      )}
+    </div>
   );
 }
 
@@ -501,3 +624,16 @@ const COMING_SOON = [
   { label: "Goals", Icon: GoalsIcon },
   { label: "Library", Icon: LibraryIcon },
 ];
+const ArchiveIcon = () => (
+  <Icon d="M4 5h16v4H4V5Zm1 4v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4" />
+);
+const SignOutIcon = () => (
+  <Icon d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h10" />
+);
+function PinIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 3h6l-1 6 3 3v2h-4v6l-1 1-1-1v-6H7v-2l3-3-1-6Z" fill="currentColor" />
+    </svg>
+  );
+}
