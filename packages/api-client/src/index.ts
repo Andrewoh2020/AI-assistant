@@ -60,7 +60,7 @@ export interface BrowserView {
     kind: "sign_in" | "code";
     site: string;
     /** The site turned down the last sign-in: the saved login, or the one just typed. */
-    problem: "saved_rejected" | "typed_rejected" | null;
+    problem: "saved_rejected" | "typed_rejected" | "saved_code_rejected" | null;
     /** A saved login set to "Ask before using": its account ('' if none), offered in the box. */
     savedAccount: string | null;
   } | null;
@@ -122,6 +122,8 @@ export interface VaultLogin {
   askBeforeUse: boolean;
   /** Whether the site took it the last time it was used. */
   lastResult: "worked" | "rejected" | null;
+  /** An authenticator key is saved, so the browser makes 2-step codes itself. */
+  hasCodeKey: boolean;
   source: "typed" | "imported";
   /** The password manager it was imported from. */
   importedFrom: string | null;
@@ -163,7 +165,10 @@ export interface VaultEvent {
     | "deleted"
     | "imported"
     | "ask_on"
-    | "ask_off";
+    | "ask_off"
+    | "code_saved"
+    | "code_removed"
+    | "code_used";
   site: string | null;
   account: string | null;
   detail: string | null;
@@ -258,6 +263,11 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     updateVaultLogin: (id: string, input: { askBeforeUse: boolean }) =>
       call<{ ok: true }>("PATCH", `/vault/logins/${id}`, input),
     deleteVaultLogin: (id: string) => call<{ ok: true }>("DELETE", `/vault/logins/${id}`),
+    /** Saves the site's authenticator key (setup key or otpauth:// link) with the login. */
+    saveVaultCodeKey: (id: string, key: string) =>
+      call<{ ok: true }>("POST", `/vault/logins/${id}/code-key`, { key }),
+    removeVaultCodeKey: (id: string) =>
+      call<{ ok: true }>("DELETE", `/vault/logins/${id}/code-key`),
     /** Reads a password manager's export file; nothing is saved yet. */
     previewVaultImport: (csv: string) =>
       call<ImportPreview>("POST", "/vault/import/preview", { csv }),

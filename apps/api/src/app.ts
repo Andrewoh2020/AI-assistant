@@ -36,6 +36,7 @@ import {
   importLogins,
   listLogins,
   setAskBeforeUse,
+  setCodeKey,
   vaultActivity,
   vaultKeyFrom,
 } from "./vault.js";
@@ -496,6 +497,45 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!s) return;
     if (!UUID.test(req.params.id)) throw new NotFound("saved login");
     if (!(await deleteLogin(sql, s.userId, req.params.id))) throw new NotFound("saved login");
+    return { ok: true };
+  });
+
+  // A login's authenticator key, for 2-step codes. Write-only: it is never sent back.
+  app.post<{ Params: { id: string }; Body: { key: string } }>(
+    "/vault/logins/:id/code-key",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["key"],
+          properties: { key: { type: "string", minLength: 1, maxLength: 1000 } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+      let ok;
+      try {
+        ok = await setCodeKey(sql, vaultKey, s.userId, req.params.id, req.body.key);
+      } catch (err) {
+        throw new BadRequest((err as Error).message);
+      }
+      if (!ok) throw new NotFound("saved login");
+      reply.header("Cache-Control", "no-store");
+      return { ok: true };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/vault/logins/:id/code-key", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+    if (!(await setCodeKey(sql, vaultKey, s.userId, req.params.id, null))) {
+      throw new NotFound("saved login");
+    }
     return { ok: true };
   });
 

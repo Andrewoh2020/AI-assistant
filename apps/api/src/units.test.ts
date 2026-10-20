@@ -4,6 +4,7 @@ import { checkUrl, decide, isPrivateAddress, looksPrivate } from "./policy.js";
 import { cleanTitle, unescapeMarkdown } from "./search.js";
 import { detectInjection, fence } from "./untrusted.js";
 import { parseCsv, readExport, siteOf } from "./vault-import.js";
+import { parseTotpKey, totp } from "./totp.js";
 import {
   hashPassword,
   openSecret,
@@ -251,5 +252,30 @@ describe("password export files", () => {
     expect(logins.map((l) => l.password)).toEqual(["new"]);
     expect(skipped).toMatchObject([{ reason: "no_password" }]);
     expect(() => readExport("name,phone\nAnn,123")).toThrow(/doesn't look like a password export/);
+  });
+});
+
+describe("2-step codes", () => {
+  it("makes the RFC 6238 codes", () => {
+    const key = parseTotpKey("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")!;
+    expect(totp({ ...key, digits: 8 }, new Date(59 * 1000))).toBe("94287082");
+    expect(totp({ ...key, digits: 8 }, new Date(1111111109 * 1000))).toBe("07081804");
+    expect(totp({ ...key, digits: 8 }, new Date(2000000000 * 1000))).toBe("69279037");
+    expect(totp(key, new Date(59 * 1000))).toBe("287082");
+  });
+
+  it("reads setup keys and otpauth links, and nothing else", () => {
+    expect(parseTotpKey("jbsw y3dp ehpk 3pxp")).toEqual({
+      secret: "JBSWY3DPEHPK3PXP",
+      digits: 6,
+      period: 30,
+      algorithm: "SHA1",
+    });
+    expect(
+      parseTotpKey("otpauth://totp/GitHub:me?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&digits=8"),
+    ).toMatchObject({ secret: "JBSWY3DPEHPK3PXP", digits: 8 });
+    expect(parseTotpKey("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP")).toBeNull();
+    expect(parseTotpKey("123456")).toBeNull();
+    expect(parseTotpKey("steam://ABCDEF")).toBeNull();
   });
 });
