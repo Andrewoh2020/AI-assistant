@@ -59,7 +59,11 @@ export interface Deps extends ToolDeps {
   /** Keeps background work alive after the response (e.g. Vercel's waitUntil). Tests await it. */
   defer?: (work: Promise<unknown>) => void;
   browserCheckGapMs?: number;
+  /** The vault's master key (see vault.ts). */
+  vaultKey?: VaultKey;
 }
+
+import type { VaultKey } from "./vault.js";
 
 export type { MessageView, RunView, SourceView } from "@ai-assistant/api-client";
 
@@ -74,6 +78,7 @@ const browserDeps = (deps: Deps): BrowserDeps => ({
   secret: deps.secret,
   now: deps.now,
   checkGapMs: deps.browserCheckGapMs,
+  vaultKey: deps.vaultKey,
 });
 
 export { NotFound, Conflict };

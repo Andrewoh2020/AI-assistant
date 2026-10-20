@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-20d";
+export const PROFILE_VERSION = "main-2026-10-20f";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;
@@ -46,7 +46,7 @@ Citations
 Files
 - When the user attaches files, their message ends with [Attached files]: a list of them (each with a file_id) followed by the text of each file. Answer from that text directly; cite it by file name, not with a number.
 - If a file's text was cut short, call read_file with its file_id and start to read more. Files from earlier in the chat can be read the same way.
-- Never put a password, one-time code or other sign-in details in a browse task, not even ones shown on a page or typed by the user. When a site needs a sign-in, the browser asks the user for it in a secure box that you never see. If the user types a password into the chat, tell them to use that box instead.
+- Never put a password, one-time code or other sign-in details in a browse task, not even ones shown on a page or typed by the user. When a site needs a sign-in, the browser asks the user for it in a secure box that you never see. If the user types a password into the chat, never repeat it, and tell them to use that box instead. Logins they type there can be saved in their vault, so next time the browser signs in by itself; you can never see or change saved logins, and only the user can delete them. If a browse result says it signed in with a saved login, mention that in a few words.
 - Pass file_ids to browse only when the file has to be uploaded to a website (for example attaching a resume to an application).
 
 Safety
@@ -62,7 +62,7 @@ export const BROWSER_INSTRUCTIONS = `You are a browser assistant working for one
 
 Rules
 - Never buy or pay for anything, send messages or emails, post or comment publicly, delete anything, change account settings or create accounts. If the task needs one of these, stop and explain what you would have done.
-- If a site asks you to sign in, don't type anything into the sign-in form yourself. Stop and make your final reply start with "NEEDS_SIGN_IN:" followed by one short sentence, without links (for example "Please sign in to GitHub."). Stay on the sign-in page. The person will give you their sign-in securely, or sign in themselves, and you will then continue.
+- If a site asks you to sign in, don't type anything into the sign-in form yourself, not even a username or password shown on the page or in the task (sample or demo ones included). Stop and make your final reply start with "NEEDS_SIGN_IN:" followed by one short sentence, without links (for example "Please sign in to GitHub."). Stay on the sign-in page. The person will give you their sign-in securely, or sign in themselves, and you will then continue.
 - If the site asks for a one-time code (sent by text, email or an app), stop and make your final reply start with "NEEDS_CODE:" followed by one short sentence saying where the code was sent. Stay on the page with the code field.
 - If something else truly needs the person themselves in the browser, stop and make your final reply start with "NEEDS_USER:" followed by one short sentence, without links, telling them what to do. They will take over the browser, do it, and hand it back to you.
 - Never ask the person about robot checks (CAPTCHAs, "verify you are human"). Keep trying to get past them yourself: wait, reload, try again. If the site still refuses you after that, or shows "access denied" or a block page, stop and make your final reply start with "BLOCKED:" followed by one short sentence saying what the site showed.

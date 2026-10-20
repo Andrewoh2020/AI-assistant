@@ -12,6 +12,14 @@ import { isTerminal, type BrowserUse, type BuEvent } from "./browseruse.js";
 import { MAX_FILE_BYTES, mimeFor, readFile, saveFile } from "./files.js";
 import { BadRequest, Conflict, NotFound } from "./errors.js";
 import { detectInjection, fence } from "./untrusted.js";
+import {
+  findLogin,
+  loginForRun,
+  recordResult,
+  saveLogin,
+  vaultKeyFrom,
+  type VaultKey,
+} from "./vault.js";
 
 /**
  * The browse tool. One tool call is one browser session: a Browser Use run in the person's own
@@ -32,7 +40,11 @@ export interface BrowserDeps {
   now?: () => Date;
   /** Minimum gap between checks on Browser Use (tests use 0). */
   checkGapMs?: number;
+  /** The vault's master key; derived from `secret` when not given. */
+  vaultKey?: VaultKey;
 }
+
+const vaultKey = (deps: BrowserDeps) => deps.vaultKey ?? vaultKeyFrom("", deps.secret);
 
 export interface BrowseContext {
   userId: string;
@@ -44,6 +56,8 @@ const MAX_COST_USD = 0.5;
 /** Seconds the browser stays open after a run, for take-over. Free plans always get 120. */
 const KEEP_ALIVE_S = 900;
 const CHECK_GAP_MS = 2000;
+/** A check that never gave its lease back (the server stopped mid-check) is retried after this. */
+const CHECK_LEASE_MS = 60 * 1000;
 const START_TIMEOUT_MS = 90 * 1000;
 const WAIT_FOR_USER_MS = 15 * 60 * 1000;
 const MAX_OUTPUT_FILES = 10;
@@ -293,7 +307,12 @@ function readEvents(events: BuEvent[], deps: BrowserDeps) {
         tool?: string;
         state?: { input?: { code?: string } };
       };
-      if (part.type === "text" && part.text?.trim()) {
+      // The agent's final "NEEDS_SIGN_IN: ..." or "BLOCKED: ..." reply is for us, not a step.
+      if (
+        part.type === "text" &&
+        part.text?.trim() &&
+        !/^(NEEDS_SIGN_IN|NEEDS_CODE|NEEDS_USER|BLOCKED):/.test(part.text.trim())
+      ) {
         const line = part.text.trim().split("\n")[0]!.replace(/[*`_]/g, "");
         out.step = line.length > 140 ? line.slice(0, 137) + "..." : line;
       }
@@ -385,18 +404,37 @@ export async function advanceBrowse(
   register: (url: string, title: string, injection: boolean) => Promise<number | null>,
 ): Promise<Record<string, unknown> | null> {
   const now = deps.now?.() ?? new Date();
-  // At most one check every 2 seconds, whoever is polling.
+  // One check at a time, at most one every 2 seconds, whoever is polling. A check can take a
+  // while (a picture, a sign-in), so it holds a lease that it gives back when it ends.
   const [s] = await withUser(
     deps.sql,
     ctx.userId,
     (tx) => tx<BrowserSessionRow[]>`
-      UPDATE browser_sessions SET checked_at = ${now}
+      UPDATE browser_sessions SET checked_at = ${new Date(now.getTime() + CHECK_LEASE_MS)}
       WHERE id = ${session.id}
         AND (checked_at IS NULL
              OR checked_at <= ${new Date(now.getTime() - (deps.checkGapMs ?? CHECK_GAP_MS))})
       RETURNING *`,
   );
   if (!s) return null;
+  try {
+    return await check(deps, ctx, s, now, register);
+  } finally {
+    await withUser(
+      deps.sql,
+      ctx.userId,
+      (tx) => tx`UPDATE browser_sessions SET checked_at = ${now} WHERE id = ${s.id}`,
+    );
+  }
+}
+
+async function check(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+  now: Date,
+  register: (url: string, title: string, injection: boolean) => Promise<number | null>,
+): Promise<Record<string, unknown> | null> {
   if (!isActive(s)) return resultFor(s);
 
   // The freshest copy of the session, for the picture (it needs the browser's id).
@@ -447,7 +485,14 @@ export async function advanceBrowse(
     const age = current.screenshot_at
       ? now.getTime() - new Date(current.screenshot_at).getTime()
       : Infinity;
-    if (age >= PICTURE_GAP_MS) await takePicture(deps, ctx, current);
+    if (age >= PICTURE_GAP_MS) {
+      const tabs = await takePicture(deps, ctx, current);
+      // Past the sign-in page after a sign-in we sent: it worked.
+      const page = tabs?.find((t) => t.active)?.url;
+      if (page && hostOf(page) === current.sign_in_site && !looksLikeSignIn(page)) {
+        await signInWorked(deps, ctx, current);
+      }
+    }
     return null;
   }
 
@@ -479,19 +524,45 @@ export async function advanceBrowse(
         : site && asking[1] === "NEEDS_CODE"
           ? "code"
           : null;
-    await update(
-      deps,
-      ctx,
-      s.id,
-      {
-        status: "needs_user",
-        needs_user: ask || "The browser needs you.",
-        ask_kind: kind,
-        ask_site: kind ? site : null,
-        waiting_since: now,
-      },
-      ["running"],
-    );
+    const fields: Record<string, unknown> = {
+      status: "needs_user",
+      needs_user: ask || "The browser needs you.",
+      ask_kind: kind,
+      ask_site: kind ? site : null,
+      ask_problem: null,
+      ask_saved_account: null,
+      step: null,
+      waiting_since: now,
+    };
+    const sentHere = !!current.sign_in_by && current.sign_in_site === site;
+    if (kind === "code" && sentHere) {
+      // Asked for a code: the site took the sign-in.
+      await signInWorked(deps, ctx, current);
+    }
+    if (kind === "sign_in" && sentHere && !current.sign_in_note) {
+      // Back on the sign-in page of the same site: the site turned the sign-in down.
+      fields.ask_problem = current.sign_in_by === "saved" ? "saved_rejected" : "typed_rejected";
+      if (current.vault_credential_id) {
+        await recordResult(deps.sql, ctx.userId, current.vault_credential_id, "rejected", s.id);
+      }
+    } else if (kind === "sign_in" && !(current.sign_in_by === "saved" && sentHere)) {
+      // The sign-in ladder: a saved login for this site fills in by itself (once per page).
+      const saved = await findLogin(deps.sql, ctx.userId, site!);
+      if (saved?.lastResult === "rejected") {
+        fields.ask_problem = "saved_rejected";
+        fields.vault_credential_id = saved.id;
+      } else if (saved?.askBeforeUse) {
+        fields.ask_saved_account = saved.account;
+        fields.vault_credential_id = saved.id;
+      } else if (saved) {
+        const row = await useSavedLogin(deps, ctx, current, site!, saved.id).catch((err) => {
+          console.error(`browse ${s.id}: saved sign-in didn't start (${(err as Error).name})`);
+          return null;
+        });
+        if (row) return null;
+      }
+    }
+    await update(deps, ctx, s.id, fields, ["running"]);
     return null;
   }
 
@@ -517,6 +588,9 @@ export async function advanceBrowse(
     result.cite_as = `[${n}]`;
   }
   if (files.length) result.note = "The user can download these files from your answer.";
+  const note = (await signInWorked(deps, ctx, current)) ?? current.sign_in_note;
+  // So the answer can say how it signed in, instead of guessing.
+  if (note) result.sign_in = note;
   const done = await update(
     deps,
     ctx,
@@ -608,6 +682,11 @@ export async function handBack(deps: BrowserDeps, userId: string, id: string) {
         needs_user: null,
         ask_kind: null,
         ask_site: null,
+        ask_problem: null,
+        ask_saved_account: null,
+        // They signed in themselves, if at all; a later sign-in page isn't a turned-down login.
+        sign_in_by: null,
+        sign_in_site: null,
         waiting_since: null,
         step: "Continuing from where you left it",
       },
@@ -619,17 +698,157 @@ export async function handBack(deps: BrowserDeps, userId: string, id: string) {
 /** Longest sign-in value accepted (Browser Use's limit is 4096 bytes). */
 const MAX_SECRET_CHARS = 1000;
 
+/** Pages that are still part of signing in, judged from the address. */
+export function looksLikeSignIn(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /log-?in|sign-?in|signon|session|auth|sso|password|2fa|mfa|verify|challenge|checkpoint/i.test(
+      u.pathname + u.search,
+    );
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Notes that the site took a sign-in we sent (once: the first check to see it wins), and logs it
+ * against the saved login. Returns the card's note, or null if there was nothing new to note.
+ */
+async function signInWorked(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+): Promise<string | null> {
+  if (!s.sign_in_by || s.sign_in_note || !s.sign_in_site) return null;
+  const site = s.sign_in_site;
+  const note =
+    s.sign_in_by === "saved"
+      ? `Signed in to ${site} with your saved login`
+      : s.vault_credential_id
+        ? `Signed in to ${site}. Your login is saved for next time`
+        : `Signed in to ${site}`;
+  const [row] = await withUser(
+    deps.sql,
+    ctx.userId,
+    (tx) => tx`UPDATE browser_sessions SET sign_in_note = ${note}
+               WHERE id = ${s.id} AND sign_in_note IS NULL RETURNING id`,
+  );
+  if (!row) return null;
+  if (s.vault_credential_id) {
+    await recordResult(deps.sql, ctx.userId, s.vault_credential_id, "worked", s.id);
+  }
+  return note;
+}
+
+/**
+ * Starts the follow-up run that types a sign-in into the page. The values go to Browser Use as
+ * secrets, which it types in by name and only on `site`; the agent, our model and our logs never
+ * see them.
+ */
+async function sendSignIn(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+  site: string,
+  login: { username: string; password: string },
+  by: "typed" | "saved",
+  credentialId: string | null,
+): Promise<BrowserSessionRow | null> {
+  const bind = (alias: string, value: string) => ({ alias, value, allowedDomains: [site] });
+  const task = [
+    by === "saved"
+      ? `The person's saved sign-in for ${site} is ready for you.`
+      : `The person has given you their sign-in for ${site}.`,
+    login.username
+      ? 'Their username or email is the secret named "login_username" and their password is the secret named "login_password".'
+      : 'Their password is the secret named "login_password" (the username is already filled in or remembered).',
+    "You can't see the values: ask for a secret by its name to have it typed into the field that has focus.",
+    "Before typing each one, focus its field with element.focus() (find the field by its label, name or type, not by screen position) and check that it has focus. Never read back what was typed.",
+    `Type them into the sign-in form on ${site}, submit it, then continue and finish the original task, following the same rules.`,
+    'If the sign-in is refused, stop and make your final reply start with "NEEDS_SIGN_IN:" and say what the site showed. If the site asks for a one-time code, reply starting with "NEEDS_CODE:".',
+  ].join("\n");
+  const run = await deps.browser.createRun({
+    task,
+    secrets: [
+      ...(login.username ? [bind("login_username", login.username)] : []),
+      bind("login_password", login.password),
+    ],
+    sessionId: s.bu_session_id!,
+    workspaceId: s.bu_workspace_id ?? undefined,
+    profileId: s.bu_profile_id ?? undefined,
+    maxCostUsd: MAX_COST_USD,
+    keepAlive: KEEP_ALIVE_S,
+  });
+  return update(
+    deps,
+    ctx,
+    s.id,
+    {
+      status: "running",
+      bu_run_id: run.id,
+      events_after: 0,
+      needs_user: null,
+      ask_kind: null,
+      ask_site: null,
+      ask_problem: null,
+      ask_saved_account: null,
+      waiting_since: null,
+      step:
+        by === "saved" ? `Signing in to ${site} with your saved login` : `Signing in to ${site}`,
+      sign_in_by: by,
+      sign_in_site: site,
+      vault_credential_id: credentialId,
+      sign_in_note: null,
+    },
+    [s.status],
+  );
+}
+
+/** Fills a saved login from the vault. Null if it can't be opened. */
+async function useSavedLogin(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+  site: string,
+  credentialId: string,
+): Promise<BrowserSessionRow | null> {
+  const login = await loginForRun(deps.sql, vaultKey(deps), ctx.userId, credentialId, site, s.id);
+  if (!login) return null;
+  return sendSignIn(deps, ctx, s, site, login, "saved", credentialId);
+}
+
+/** Browser Use's errors are never passed on or logged: its reply could repeat what was sent. */
+async function guarded<T>(s: BrowserSessionRow, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (err) {
+    if (err instanceof Conflict || err instanceof BadRequest) throw err;
+    const status = (err as { status?: number }).status;
+    if (status === 409) {
+      throw new Conflict("The browser is still busy. Try again in a few seconds.");
+    }
+    console.error(`browse ${s.id}: sign-in run didn't start (HTTP ${status ?? "?"})`);
+    throw new Conflict("The browser couldn't take your sign-in. Try again, or take control.");
+  }
+}
+
 /**
  * The secure sign-in box: the person's sign-in (or one-time code) goes straight to Browser Use
  * with a follow-up run, which types it into the page. Only for the site the browser was on when
- * it asked. Neither we nor the agent ever see or keep the values: Browser Use types them in by
- * name, and only on that site.
+ * it asked. With "Save for next time" (the default) the login is also saved in the vault, bound
+ * to that site; `useSaved` fills the saved one instead (for logins set to "Ask before using").
  */
 export async function signIn(
   deps: BrowserDeps,
   userId: string,
   id: string,
-  input: { username?: string; password?: string; code?: string },
+  input: {
+    username?: string;
+    password?: string;
+    code?: string;
+    save?: boolean;
+    useSaved?: boolean;
+  },
 ) {
   const s = await owned(deps, userId, id);
   const ctx = { userId, runId: s.run_id ?? "" };
@@ -637,58 +856,59 @@ export async function signIn(
     throw new Conflict("The browser isn't asking for a sign-in.");
   }
   const site = s.ask_site;
-  const bind = (alias: string, value: string) => ({ alias, value, allowedDomains: [site] });
-  let secrets;
-  let task;
+  if (s.ask_kind === "sign_in" && input.useSaved) {
+    const saved = await findLogin(deps.sql, userId, site);
+    if (!saved) throw new Conflict(`There's no saved login for ${site} now. Type it instead.`);
+    const row = await guarded(s, () => useSavedLogin(deps, ctx, s, site, saved.id));
+    if (!row)
+      throw new Conflict(`The saved login for ${site} couldn't be opened. Type it instead.`);
+    return row;
+  }
   if (s.ask_kind === "sign_in") {
     const username = input.username?.trim() ?? "";
     const password = input.password ?? "";
     if (!password || password.length > MAX_SECRET_CHARS || username.length > MAX_SECRET_CHARS) {
       throw new BadRequest("Enter your password.");
     }
-    secrets = [
-      ...(username ? [bind("login_username", username)] : []),
-      bind("login_password", password),
-    ];
-    task = [
-      `The person has given you their sign-in for ${site}.`,
-      username
-        ? 'Their username or email is the secret named "login_username" and their password is the secret named "login_password".'
-        : 'Their password is the secret named "login_password" (the username is already filled in or remembered).',
-      "You can't see the values: ask for a secret by its name to have it typed into the field that has focus.",
-      `Type them into the sign-in form on ${site}, submit it, then continue and finish the original task, following the same rules.`,
-      'If the sign-in is refused, stop and make your final reply start with "NEEDS_SIGN_IN:" and say what the site showed. If the site asks for a one-time code, reply starting with "NEEDS_CODE:".',
-    ].join("\n");
-  } else {
-    const code = input.code?.replace(/\s+/g, "") ?? "";
-    if (!code || code.length > 64) throw new BadRequest("Enter the code.");
-    secrets = [bind("login_code", code)];
-    task = [
-      `The person has given you the one-time code ${site} asked for. It is the secret named "login_code".`,
-      "You can't see it: ask for the secret by its name to have it typed into the field that has focus.",
-      "Type it into the code field, submit it, then continue and finish the original task, following the same rules.",
-      'If the code is refused, stop and make your final reply start with "NEEDS_CODE:" and say what the site showed.',
-    ].join("\n");
+    let credentialId: string | null = null;
+    if (input.save !== false) {
+      const page = s.tabs?.find?.((t) => t.active)?.url;
+      credentialId = await saveLogin(deps.sql, vaultKey(deps), userId, {
+        site,
+        username,
+        password,
+        loginPath: page && hostOf(page) === site ? new URL(page).pathname : null,
+        // Replaces the saved login the site just turned down.
+        replaceId: s.vault_credential_id,
+        browserSessionId: s.id,
+      });
+    }
+    return (
+      (await guarded(s, () =>
+        sendSignIn(deps, ctx, s, site, { username, password }, "typed", credentialId),
+      )) ?? s
+    );
   }
-  let run;
-  try {
-    run = await deps.browser.createRun({
+
+  const code = input.code?.replace(/\s+/g, "") ?? "";
+  if (!code || code.length > 64) throw new BadRequest("Enter the code.");
+  const task = [
+    `The person has given you the one-time code ${site} asked for. It is the secret named "login_code".`,
+    "You can't see it: ask for the secret by its name to have it typed into the field that has focus. Focus the code field with element.focus() first. Never read back what was typed.",
+    "Type it into the code field, submit it, then continue and finish the original task, following the same rules.",
+    'If the code is refused, stop and make your final reply start with "NEEDS_CODE:" and say what the site showed.',
+  ].join("\n");
+  const run = await guarded(s, () =>
+    deps.browser.createRun({
       task,
-      secrets,
+      secrets: [{ alias: "login_code", value: code, allowedDomains: [site] }],
       sessionId: s.bu_session_id!,
       workspaceId: s.bu_workspace_id ?? undefined,
       profileId: s.bu_profile_id ?? undefined,
       maxCostUsd: MAX_COST_USD,
       keepAlive: KEEP_ALIVE_S,
-    });
-  } catch (err) {
-    const status = (err as { status?: number }).status;
-    if (status === 409)
-      throw new Conflict("The browser is still busy. Try again in a few seconds.");
-    // Never pass the error on: Browser Use's reply could repeat what was sent.
-    console.error(`browse ${s.id}: sign-in run didn't start (HTTP ${status ?? "?"})`);
-    throw new Conflict("The browser couldn't take your sign-in. Try again, or take control.");
-  }
+    }),
+  );
   return (
     (await update(
       deps,
@@ -701,8 +921,10 @@ export async function signIn(
         needs_user: null,
         ask_kind: null,
         ask_site: null,
+        ask_problem: null,
+        ask_saved_account: null,
         waiting_since: null,
-        step: s.ask_kind === "sign_in" ? `Signing in to ${site}` : "Entering your code",
+        step: "Entering your code",
       },
       ["needs_user"],
     )) ?? s
@@ -754,7 +976,7 @@ export function labelFor(s: BrowserSessionRow): string {
     case "running":
       return "Browsing";
     case "needs_user":
-      return "Sign-in needed";
+      return "Waiting for you";
     case "user_control":
       return "You're in control";
     case "done":
@@ -791,8 +1013,14 @@ export function viewOf(s: BrowserSessionRow, secret: string): BrowserView {
     needsUser: s.status === "needs_user" ? s.needs_user : null,
     ask:
       s.status === "needs_user" && s.ask_kind && s.ask_site
-        ? { kind: s.ask_kind, site: s.ask_site }
+        ? {
+            kind: s.ask_kind,
+            site: s.ask_site,
+            problem: s.ask_kind === "sign_in" ? s.ask_problem : null,
+            savedAccount: s.ask_kind === "sign_in" ? s.ask_saved_account : null,
+          }
         : null,
+    note: s.sign_in_note,
     liveUrl:
       active && s.live_view_url_ciphertext ? openSecret(s.live_view_url_ciphertext, secret) : null,
     screenshotId: s.screenshot_file_id,

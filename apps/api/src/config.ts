@@ -9,6 +9,8 @@ export interface Config {
   /** Empty in the cloud environment, where the network proxy adds the key. */
   browserUseKey: string;
   sessionSecret: string;
+  /** The vault's master key (32 bytes, base64). Empty: derived from the session secret. */
+  vaultMasterKey: string;
   /** People need this code to create an account. Empty disables sign-up. */
   signupCode: string;
   secureCookies: boolean;
@@ -31,6 +33,7 @@ export function loadConfig(env = process.env): Config {
     browserUseBase: env.BROWSER_USE_API_BASE ?? "https://api.browser-use.com",
     browserUseKey: env.BROWSER_USE_API_KEY ?? "",
     sessionSecret: sessionSecret || "dev-only-session-secret-change-me-0000",
+    vaultMasterKey: env.VAULT_MASTER_KEY ?? "",
     signupCode: env.SIGNUP_CODE ?? "",
     secureCookies: hosted,
   };

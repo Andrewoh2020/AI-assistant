@@ -41,7 +41,7 @@ export interface BrowserView {
   /** needs_user: the agent asked the person to do something. user_control: they took over. */
   status: BrowserStatus;
   /**
-   * The status in Muse's words: Working on it, Browsing, Sign-in needed, You're in control,
+   * The status in Muse's words: Working on it, Browsing, Waiting for you, You're in control,
    * Done, Site blocked, Couldn't finish, Stopped.
    */
   label: string;
@@ -56,7 +56,16 @@ export interface BrowserView {
    * The browser is asking for the person's sign-in (or a one-time code) for this site. It can be
    * given in the secure sign-in box; it is typed only into that site and never seen by the AI.
    */
-  ask: { kind: "sign_in" | "code"; site: string } | null;
+  ask: {
+    kind: "sign_in" | "code";
+    site: string;
+    /** The site turned down the last sign-in: the saved login, or the one just typed. */
+    problem: "saved_rejected" | "typed_rejected" | null;
+    /** A saved login set to "Ask before using": its account ('' if none), offered in the box. */
+    savedAccount: string | null;
+  } | null;
+  /** How it signed in, like "Signed in to github.com with your saved login". */
+  note: string | null;
   /** The live browser. Works like a password while the browser is open; never share it. */
   liveUrl: string | null;
   /** The last picture of the page, if there is one (see fileViewUrl). */
@@ -198,8 +207,18 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     handBackBrowser: (id: string) =>
       call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/hand-back`, {}),
     /** The secure sign-in box. The values go to the browser only; nothing keeps them. */
-    signInBrowser: (id: string, input: { username?: string; password?: string; code?: string }) =>
-      call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/sign-in`, input),
+    signInBrowser: (
+      id: string,
+      input: {
+        username?: string;
+        password?: string;
+        code?: string;
+        /** Save the login in the vault for next time (the default). */
+        save?: boolean;
+        /** Fill the saved login instead. */
+        useSaved?: boolean;
+      },
+    ) => call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/sign-in`, input),
   };
 }
 

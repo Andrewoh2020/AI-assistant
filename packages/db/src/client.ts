@@ -28,6 +28,23 @@ export async function withUser<T>(
   }) as Promise<T>;
 }
 
+/**
+ * Like withUser, but as the vault service: the only role that can open saved logins (the vault
+ * schema). Only apps/api/src/vault.ts calls this; the rest of the app runs as app_user.
+ */
+export async function withVault<T>(
+  sql: Sql,
+  userId: string,
+  fn: (tx: TransactionSql) => Promise<T>,
+): Promise<T> {
+  if (!UUID.test(userId)) throw new Error("withVault: userId must be a UUID");
+  return sql.begin(async (tx) => {
+    await tx`SET LOCAL ROLE vault_service`;
+    await tx`SELECT set_config('app.user_id', ${userId}, true)`;
+    return fn(tx);
+  }) as Promise<T>;
+}
+
 export interface SignedInUser {
   userId: string;
   travilaUserId: string;
