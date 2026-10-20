@@ -11,9 +11,12 @@ describe("token contrast (WCAG AA)", () => {
     }
   }
 
-  it("matches the accent values chosen in the architecture plan", () => {
-    expect(colors.light.accent).toBe("#0066CC");
-    expect(colors.dark.accent).toBe("#4DA3FF");
+  it("matches the colors measured from the Muse app", () => {
+    expect(colors.light.bg).toBe("#FCFCFC");
+    expect(colors.light.bubble).toBe("#E9EAEB");
+    expect(colors.light.bubbleUser).toBe("#BFDAFB");
+    expect(colors.light.ink).toBe("#111111");
+    expect(colors.light.accent).toBe("#2962CD");
     expect(contrastRatio("#0066CC", "#FFFFFF")).toBeCloseTo(5.57, 1);
   });
 
@@ -23,8 +26,9 @@ describe("token contrast (WCAG AA)", () => {
 
   it("builds CSS with both modes", () => {
     const css = buildCss();
-    expect(css).toContain("--accent: #0066CC;");
-    expect(css).toContain("--accent: #4DA3FF;");
+    expect(css).toContain("--accent: #2962CD;");
+    expect(css).toContain("--bubble-user: #BFDAFB;");
+    expect(css).toContain("--accent: #7FABF2;");
     expect(css).toContain("prefers-color-scheme: dark");
   });
 });

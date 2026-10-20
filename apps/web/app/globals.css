@@ -12,9 +12,17 @@ body {
   font-family: var(--font);
   font-size: var(--type-body-size);
   line-height: var(--type-body-lh);
+  -webkit-font-smoothing: antialiased;
 }
 a {
   color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+::placeholder {
+  color: var(--ink-3);
 }
 :focus-visible {
   outline: 3px solid var(--accent);
@@ -43,18 +51,22 @@ code {
   text-decoration: none;
   transition: background var(--motion-fast) ease-out;
 }
+/* Muse's controls are monochrome: dark buttons, and white pills that float on a soft shadow. */
 .btn-primary {
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--ink);
+  color: var(--bg);
 }
 .btn-secondary {
   background: var(--surface);
   color: var(--ink);
-  border-color: var(--line);
+  box-shadow: var(--shadow-1);
 }
 .btn-ghost {
   background: transparent;
-  color: var(--accent);
+  color: var(--ink);
+}
+.btn-ghost:hover {
+  background: var(--selected);
 }
 .btn-danger {
   background: var(--danger);
@@ -88,6 +100,13 @@ code {
   padding: 6px 14px;
   font-size: 14px;
 }
+.btn-round {
+  width: var(--touch);
+  height: var(--touch);
+  min-height: var(--touch);
+  padding: 0;
+  border-radius: 50%;
+}
 .btn-block {
   width: 100%;
 }
@@ -106,9 +125,8 @@ code {
   width: 100%;
   max-width: 400px;
   background: var(--surface);
-  border: 1px solid var(--line);
   border-radius: var(--radius-l);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-2);
   padding: 28px;
   display: grid;
   gap: 14px;
@@ -132,6 +150,10 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius-s);
   padding: 10px 12px;
+}
+.field input {
+  background: var(--surface-2);
+  border-color: transparent;
 }
 .form-error {
   color: var(--danger);
@@ -158,7 +180,7 @@ code {
   border-radius: var(--radius-s);
 }
 .sidebar {
-  background: var(--surface-2);
+  background: var(--bg);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -172,8 +194,10 @@ code {
   gap: 8px;
   padding: 14px 14px;
 }
+.sidebar-head {
+  padding: 20px 16px 8px;
+}
 .sidebar-foot {
-  border-top: 1px solid var(--line);
   margin-top: auto;
 }
 .who {
@@ -184,7 +208,22 @@ code {
   white-space: nowrap;
 }
 .brand {
+  font-size: var(--type-h1-size);
   font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.nav-label {
+  font-size: var(--type-caption-size);
+  font-weight: var(--type-caption-weight);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  margin: 16px 16px 4px;
+}
+.nav-divider {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 8px 16px;
 }
 .chat-list {
   list-style: none;
@@ -193,9 +232,11 @@ code {
   overflow-y: auto;
 }
 .chat-list a {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 10px 12px;
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-pill);
   color: var(--ink);
   text-decoration: none;
   white-space: nowrap;
@@ -203,13 +244,18 @@ code {
   text-overflow: ellipsis;
   min-height: var(--touch);
 }
-.chat-list a:hover {
-  background: var(--surface);
-}
+.chat-list a:hover,
 .chat-list a.is-current {
-  background: var(--surface);
-  font-weight: 600;
-  box-shadow: var(--shadow-1);
+  background: var(--selected);
+}
+.chat-list a > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nav-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
 }
 
 .chat {
@@ -223,7 +269,6 @@ code {
   align-items: center;
   gap: 8px;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--line);
 }
 .chat-head h1 {
   margin: 0;
@@ -262,19 +307,19 @@ code {
 }
 .user-text {
   margin: 0;
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-radius: 18px 18px 6px 18px;
-  padding: 10px 14px;
+  background: var(--bubble-user);
+  color: var(--ink);
+  border-radius: var(--radius-l);
+  padding: 10px 16px;
   max-width: 85%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .answer {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-m);
-  padding: 4px 18px 12px;
+  background: var(--bubble);
+  border-radius: var(--radius-l);
+  padding: 2px 16px 12px;
+  max-width: 92%;
 }
 .markdown {
   overflow-wrap: anywhere;
@@ -313,7 +358,7 @@ code {
   min-width: 20px;
 }
 .sources {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--bubble-line);
   margin-top: 8px;
   padding-top: 8px;
   font-size: var(--type-small-size);
@@ -321,7 +366,7 @@ code {
 .sources h3 {
   font-size: var(--type-caption-size);
   text-transform: uppercase;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.04em;
   color: var(--ink-2);
   margin: 4px 0 6px;
 }
@@ -377,7 +422,7 @@ code {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--ink-2);
   animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -402,8 +447,7 @@ code {
   flex-wrap: wrap;
   gap: 8px;
   align-items: flex-end;
-  padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
+  padding: 12px 20px calc(16px + env(safe-area-inset-bottom));
   max-width: calc(var(--chat-column) + 40px);
   width: 100%;
   margin: 0 auto;
@@ -417,8 +461,10 @@ code {
   min-height: var(--touch);
   max-height: 40vh;
   field-sizing: content;
+  border: 0;
   border-radius: 22px;
-  padding: 10px 16px;
+  padding: 10px 18px;
+  box-shadow: var(--shadow-1);
 }
 .detail {
   border-left: 1px solid var(--line);

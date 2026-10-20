@@ -178,6 +178,8 @@ export function AppShell({ chatId }: { chatId: string }) {
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
+  const mainChat = chats.find((c) => c.kind === "main");
+  const sideChats = chats.filter((c) => c.kind !== "main");
   const selectedMessage = selected ? messages.find((m) => m.id === selected.messageId) : undefined;
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
   const working = !!activeRunId;
@@ -192,24 +194,36 @@ export function AppShell({ chatId }: { chatId: string }) {
       <nav className="sidebar" aria-label="Chats">
         <div className="sidebar-head">
           <span className="brand">Assistant</span>
-          <button className="btn btn-secondary btn-small" type="button" onClick={newSideChat}>
-            New side chat
+          <button
+            className="btn btn-secondary btn-round"
+            type="button"
+            onClick={newSideChat}
+            aria-label="New side chat"
+            title="New side chat"
+          >
+            <ComposeIcon />
           </button>
         </div>
         <ul className="chat-list">
-          {chats.map((c) => (
-            <li key={c.id}>
-              <Link
-                href={`/chat/${c.id}`}
-                className={c.id === chatId ? "is-current" : undefined}
-                aria-current={c.id === chatId ? "page" : undefined}
-                onClick={() => setNavOpen(false)}
-              >
-                {c.kind === "main" ? "Main" : c.title || "New side chat"}
-              </Link>
+          {mainChat && (
+            <li>
+              <ChatLink chat={mainChat} current={chatId} onPick={() => setNavOpen(false)} />
             </li>
-          ))}
+          )}
         </ul>
+        {sideChats.length > 0 && (
+          <>
+            <hr className="nav-divider" />
+            <p className="nav-label">Side chats</p>
+            <ul className="chat-list">
+              {sideChats.map((c) => (
+                <li key={c.id}>
+                  <ChatLink chat={c} current={chatId} onPick={() => setNavOpen(false)} />
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
         <div className="sidebar-foot">
           <span className="who">{me?.displayName || me?.email}</span>
           <button className="btn btn-ghost btn-small" type="button" onClick={signOut}>
@@ -221,14 +235,15 @@ export function AppShell({ chatId }: { chatId: string }) {
       <main className="chat">
         <header className="chat-head">
           <button
-            className="btn btn-ghost btn-small nav-toggle"
+            className="btn btn-secondary btn-round nav-toggle"
             type="button"
             aria-expanded={navOpen}
+            aria-label="Chats"
             onClick={() => setNavOpen(!navOpen)}
           >
-            Chats
+            <MenuIcon />
           </button>
-          <h1>{chat ? (chat.kind === "main" ? "Main" : chat.title || "Side chat") : ""}</h1>
+          <h1>{chat ? (chat.kind === "main" ? "Main chat" : chat.title || "Side chat") : ""}</h1>
         </header>
 
         <div className="messages" aria-live="polite">
@@ -330,5 +345,64 @@ export function AppShell({ chatId }: { chatId: string }) {
         )}
       </aside>
     </div>
+  );
+}
+
+function ChatLink({
+  chat,
+  current,
+  onPick,
+}: {
+  chat: ChatSummary;
+  current: string;
+  onPick: () => void;
+}) {
+  const isCurrent = chat.id === current;
+  const isMain = chat.kind === "main";
+  return (
+    <Link
+      href={`/chat/${chat.id}`}
+      className={isCurrent ? "is-current" : undefined}
+      aria-current={isCurrent ? "page" : undefined}
+      onClick={onPick}
+    >
+      {isMain && <ChatIcon />}
+      <span>{isMain ? "Main chat" : chat.title || "New side chat"}</span>
+    </Link>
+  );
+}
+
+function ChatIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 4c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7c-.9 0-1.8-.1-2.6-.3L5 19.5l1.2-3.4C4.6 14.8 3.5 13 3.5 11c0-3.9 3.8-7 8.5-7Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ComposeIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M11 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M17.5 3.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 8.5-8.5Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MenuIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 9h14M5 15h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   );
 }

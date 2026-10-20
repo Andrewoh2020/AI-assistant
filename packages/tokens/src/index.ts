@@ -1,6 +1,8 @@
 /**
- * Design tokens for web and mobile, from Muse's Web & Mobile Design System
- * (sections 2-4, M3), with the blue accent chosen in the architecture plan, section 9.
+ * Design tokens for web and mobile. Colors, type sizes and corner radii are measured from the
+ * Muse iPhone app (screenshots Andrew shared on 2026-10-20): near-white page, gray assistant
+ * bubbles, light-blue user bubbles, near-black text, blue links, Apple's system font.
+ * Dark mode is derived from the same scheme until we have Muse dark-mode screenshots.
  * One source: `scripts/build-css.mjs` turns this into CSS variables for the web app,
  * and the mobile app will import the same objects as a typed theme.
  */
@@ -9,35 +11,51 @@ export type Mode = "light" | "dark";
 
 export const colors = {
   light: {
-    bg: "#FAF9F7",
+    /** Page and sidebar background. */
+    bg: "#FCFCFC",
+    /** Floating controls: message box, round buttons, cards. Shown with a soft shadow. */
     surface: "#FFFFFF",
-    surface2: "#F3F1EC",
-    ink: "#1A1A18",
-    ink2: "#5C5952",
-    ink3: "#8A867D",
-    line: "#E6E2D9",
-    accent: "#0066CC",
+    /** Code blocks and quiet fills. */
+    surface2: "#F3F4F5",
+    /** The current item in the sidebar and tab bar. */
+    selected: "#EEEFF0",
+    /** Assistant message bubble. */
+    bubble: "#E9EAEB",
+    /** Divider inside an assistant bubble (above Sources). */
+    bubbleLine: "#D5D6D8",
+    /** User message bubble. */
+    bubbleUser: "#BFDAFB",
+    ink: "#111111",
+    ink2: "#666769",
+    /** Muse's hint gray: placeholders and small section labels only. */
+    ink3: "#A4A6A9",
+    line: "#E2E2E2",
+    /** Links and citations. */
+    accent: "#2962CD",
     accentInk: "#FFFFFF",
-    accentSoft: "#E8F1FB",
+    accentSoft: "#DCE7FA",
     success: "#18794E",
     successSoft: "#E6F4EC",
-    // Muse lists #9A6A00, which is only 4.28:1 on warnSoft; darkened to pass AA.
     warn: "#8A5F00",
     warnSoft: "#FDF3D7",
     danger: "#C92A2A",
     dangerSoft: "#FDECEC",
   },
   dark: {
-    bg: "#171715",
-    surface: "#232320",
-    surface2: "#2C2C28",
-    ink: "#F2F0E9",
-    ink2: "#C4C0B6",
-    ink3: "#9A968C",
-    line: "#3A3934",
-    accent: "#4DA3FF",
+    bg: "#0F0F10",
+    surface: "#1C1C1E",
+    surface2: "#232325",
+    selected: "#2A2A2C",
+    bubble: "#262729",
+    bubbleLine: "#3A3B3E",
+    bubbleUser: "#1F3B5E",
+    ink: "#F2F2F3",
+    ink2: "#A3A5A8",
+    ink3: "#6F7174",
+    line: "#2C2D2F",
+    accent: "#7FABF2",
     accentInk: "#0B1A2B",
-    accentSoft: "#1A2C40",
+    accentSoft: "#1E2D47",
     success: "#4CC38A",
     successSoft: "#16301F",
     warn: "#E0B341",
@@ -50,8 +68,8 @@ export const colors = {
 export type ColorName = keyof (typeof colors)["light"];
 
 export const radius = {
-  web: { s: 8, m: 12, l: 18, pill: 999 },
-  mobile: { s: 12, m: 16, l: 22, pill: 999 },
+  web: { s: 10, m: 16, l: 20, pill: 999 },
+  mobile: { s: 10, m: 16, l: 20, pill: 999 },
 } as const;
 
 export const space = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 24, 6: 32, 8: 48 } as const;
@@ -60,32 +78,33 @@ export const space = { 1: 4, 2: 8, 3: 12, 4: 16, 5: 24, 6: 32, 8: 48 } as const;
 export const type = {
   web: {
     display: [34, 1.15, 700],
-    h1: [28, 1.2, 700],
-    h2: [23, 1.3, 700],
-    h3: [17, 1.4, 600],
-    body: [16, 1.55, 400],
-    small: [14, 1.5, 400],
-    caption: [12, 1.4, 700],
+    h1: [24, 1.2, 700],
+    h2: [21, 1.25, 700],
+    h3: [17, 1.3, 600],
+    body: [17, 1.3, 400],
+    small: [15, 1.35, 400],
+    caption: [13, 1.3, 500],
   },
   mobile: {
-    display: [32, 1.15, 700],
-    title: [26, 1.2, 700],
-    headline: [20, 1.3, 600],
-    body: [17, 1.5, 400],
-    callout: [16, 1.5, 400],
-    caption: [13, 1.4, 400],
+    display: [34, 1.15, 700],
+    title: [24, 1.2, 700],
+    headline: [20, 1.25, 600],
+    body: [17, 1.3, 400],
+    callout: [15, 1.35, 400],
+    caption: [13, 1.3, 500],
   },
 } as const;
 
 export const font = {
-  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif',
+  // Muse uses Apple's system font (SF Pro); other systems get their closest equivalent.
+  sans: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
   mono: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
 } as const;
 
 export const shadow = {
   light: {
-    1: "0 1px 2px rgba(26,26,24,.06), 0 1px 8px rgba(26,26,24,.04)",
-    2: "0 8px 28px rgba(26,26,24,.12)",
+    1: "0 1px 3px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06)",
+    2: "0 8px 32px rgba(0,0,0,.12)",
   },
   dark: {
     1: "0 1px 2px rgba(0,0,0,.4), 0 1px 8px rgba(0,0,0,.3)",
@@ -115,12 +134,19 @@ export const contrastPairs: ReadonlyArray<[fg: ColorName, bg: ColorName, min: nu
   ["ink", "bg", 4.5],
   ["ink", "surface", 4.5],
   ["ink", "surface2", 4.5],
+  ["ink", "selected", 4.5],
+  ["ink", "bubble", 4.5],
+  ["ink", "bubbleUser", 4.5],
+  ["ink2", "bubble", 4.5],
   ["ink2", "bg", 4.5],
   ["ink2", "surface", 4.5],
   ["ink2", "surface2", 4.5],
-  ["ink3", "surface", 3],
+  // ink3 is Muse's own hint gray (about 2.4:1). Kept to match Muse; it is used only for
+  // placeholders and section labels, never for content.
+  ["ink3", "surface", 2.3],
   ["accent", "bg", 4.5],
   ["accent", "surface", 4.5],
+  ["accent", "bubble", 4.5],
   ["accentInk", "accent", 4.5],
   ["accent", "accentSoft", 4.5],
   ["success", "surface", 4.5],
