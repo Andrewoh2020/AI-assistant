@@ -55,9 +55,12 @@ export function AppShell({ chatId }: { chatId: string }) {
   // Files attached to the message being written (already uploaded).
   const [attachments, setAttachments] = useState<FileView[]>([]);
   const [uploading, setUploading] = useState(0);
+  // The message being sent, shown at once while the server accepts it.
+  const [pending, setPending] = useState<{ text: string; files: FileView[] } | null>(null);
+  const sendingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [navOpen, setNavOpen] = useState(false);
-  // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's menu
+  // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's chat
   // button opens it over the chat and it closes after you pick one.
   const [keepPanel, setKeepPanel] = usePref("keepChatPanel", true);
   const [showArchived, setShowArchived] = usePref("showArchivedChats", false);
@@ -66,7 +69,7 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [selected, setSelected] = useState<{ messageId: string; n: number | null } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
-  const panelToggleRef = useRef<HTMLButtonElement>(null);
+  const panelToggleRef = useRef<HTMLAnchorElement>(null);
 
   // A chat panel opened over the chat closes when you click anywhere else, or press Escape.
   useEffect(() => {
@@ -117,6 +120,7 @@ export function AppShell({ chatId }: { chatId: string }) {
     setSendError(null);
     setSelected(null);
     setAttachments([]);
+    setPending(null);
     setDraft(drafts.get(chatId) ?? "");
     setUnread((prev) => {
       if (!prev.has(chatId)) return prev;
@@ -241,12 +245,21 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, activeRunId, endedRuns.length]);
+  }, [messages.length, activeRunId, endedRuns.length, pending]);
 
   async function send(text: string, files: FileView[] = attachments) {
     const trimmed = text.trim();
-    if (!trimmed || activeRunId || uploading) return;
+    // One send at a time: a second Enter while the first is on its way does nothing.
+    if (!trimmed || activeRunId || uploading || sendingRef.current) return;
+    sendingRef.current = true;
     setSendError(null);
+    // Show the message and "Thinking" straight away, and empty the box.
+    const fromComposer = text === draft;
+    setPending({ text: trimmed, files });
+    if (fromComposer) {
+      changeDraft("");
+      setAttachments([]);
+    }
     const clientMessageId = crypto.randomUUID();
     try {
       const res = await api.sendMessage(chatId, {
@@ -254,8 +267,6 @@ export function AppShell({ chatId }: { chatId: string }) {
         clientMessageId,
         fileIds: files.map((f) => f.id),
       });
-      changeDraft("");
-      setAttachments([]);
       setMessages((prev) => [...prev, res.message]);
       setChats((prev) =>
         prev.map((c) =>
@@ -267,7 +278,15 @@ export function AppShell({ chatId }: { chatId: string }) {
       // The first message names a new side chat and moves it to the top of the list.
       void refreshChats();
     } catch (err) {
+      // Put the message back so nothing is lost.
+      if (fromComposer) {
+        if (!drafts.get(chatId)) changeDraft(text);
+        setAttachments((a) => (a.length ? a : files));
+      }
       if (!handleAuth(err)) setSendError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+      sendingRef.current = false;
     }
   }
 
@@ -388,7 +407,7 @@ export function AppShell({ chatId }: { chatId: string }) {
   const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
   const archivedChats = chats.filter((c) => c.archived);
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
-  const working = !!activeRunId;
+  const working = !!activeRunId || !!pending;
   const isEmpty = messages.length === 0 && !working;
 
   const q = query.trim().toLowerCase();
@@ -412,6 +431,14 @@ export function AppShell({ chatId }: { chatId: string }) {
             className="rail-btn is-current"
             aria-label="Chat"
             title="Chat"
+            ref={panelToggleRef}
+            aria-expanded={keepPanel ? undefined : panelOpen}
+            onClick={(e) => {
+              // With the panel not kept visible, Chat opens the chat list over the chat.
+              if (keepPanel) return;
+              e.preventDefault();
+              setPanelOpen(!panelOpen);
+            }}
           >
             <ChatIcon />
           </Link>
@@ -428,16 +455,16 @@ export function AppShell({ chatId }: { chatId: string }) {
             </button>
           ))}
         </div>
-        <button
-          className="rail-btn"
-          type="button"
-          ref={panelToggleRef}
-          aria-label={panelShown ? "Hide chats" : "Show chats"}
-          aria-expanded={panelShown}
-          onClick={() => (keepPanel ? setKeepPanel(false) : setPanelOpen(!panelOpen))}
-        >
-          <MenuIcon />
-        </button>
+        <Menu label="Menu" trigger={<MenuIcon />} className="rail-menu" buttonClassName="rail-btn">
+          {() => (
+            <>
+              <p className="menu-who">{me?.displayName || me?.email}</p>
+              <MenuItem icon={<SignOutIcon />} onSelect={signOut}>
+                Sign out
+              </MenuItem>
+            </>
+          )}
+        </Menu>
       </nav>
 
       <nav className="sidebar" aria-label="Chats" ref={sidebarRef}>
@@ -474,11 +501,6 @@ export function AppShell({ chatId }: { chatId: string }) {
                   }}
                 >
                   {showArchived ? "Hide archived chats" : "Show archived chats"}
-                </MenuItem>
-                <hr className="menu-divider" />
-                <p className="menu-who">{me?.displayName || me?.email}</p>
-                <MenuItem icon={<SignOutIcon />} onSelect={signOut}>
-                  Sign out
                 </MenuItem>
               </>
             )}
@@ -625,6 +647,14 @@ export function AppShell({ chatId }: { chatId: string }) {
               </div>
             );
           })}
+          {pending && (
+            <article className="turn turn-user" aria-label="You">
+              <div className="user-turn">
+                <p className="user-text">{pending.text}</p>
+                <FileList files={pending.files} />
+              </div>
+            </article>
+          )}
           {working && activeRun?.browser && (
             <BrowserCard
               browser={activeRun.browser}
@@ -692,7 +722,13 @@ export function AppShell({ chatId }: { chatId: string }) {
               maxLength={8000}
             />
             {working ? (
-              <button className="send-btn is-active" type="button" onClick={stop} aria-label="Stop">
+              <button
+                className="send-btn is-active"
+                type="button"
+                onClick={stop}
+                disabled={!activeRunId}
+                aria-label="Stop"
+              >
                 <StopIcon />
               </button>
             ) : (
