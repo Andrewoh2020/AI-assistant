@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { Sql } from "@ai-assistant/db";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withUser, type Sql } from "@ai-assistant/db";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
@@ -750,7 +750,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const id = asking.browsers[0].id;
     // The site comes from the page the browser is on.
     expect(asking.browsers[0]).toMatchObject({
-      label: "Sign-in needed",
+      label: "Waiting for you",
       ask: { kind: "sign_in", site: "example.com" },
       needsUser: "Please sign in to Example.",
     });
@@ -794,6 +794,229 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(kept!.n).toBe(0);
     // Once it's no longer asking, the box refuses.
     expect((await send(cookie, { password: "x" })).statusCode).toBe(409);
+  });
+
+  describe("the vault", () => {
+    const PASSWORD = "Dummy-Vault-Pw-7731";
+
+    /** One question that browses; the browser's runs follow `scripts` in order. */
+    async function browseTask(cookie: string, ...scripts: { result: string; polls?: number }[]) {
+      const chat = await mainChatId(cookie);
+      browser.scripts.push(...scripts);
+      travila.scripts.push([
+        { tools: [{ name: "browse", args: { title: "Count unread", task: "Count my unread." } }] },
+        { answer: "You have 3 unread messages." },
+      ]);
+      return (await ask(cookie, chat, "How many unread?")).json().run.id as string;
+    }
+    const send = (cookie: string, id: string, payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: `/browser-sessions/${id}/sign-in`,
+        headers: { cookie },
+        payload,
+      });
+    const lastRun = () => [...browser.runs.values()].at(-1)!;
+    async function userOf(cookie: string) {
+      const me = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
+      return me.json().userId as string;
+    }
+    const saved = (userId: string) =>
+      sql!<{ id: string; site: string; account: string; last_result: string | null }[]>`
+        SELECT id, site, account, last_result FROM vault.credentials WHERE user_id = ${userId}`;
+    const actions = async (userId: string) =>
+      (
+        await sql!<{ action: string }[]>`
+          SELECT action FROM audit_events WHERE user_id = ${userId} ORDER BY created_at, action`
+      ).map((r) => r.action);
+
+    it("saves a login typed in the box and fills it in by itself next time", async () => {
+      const cookie = await signUp();
+      const userId = await userOf(cookie);
+      const logged: string[] = [];
+      const spies = (["log", "error", "warn", "info"] as const).map((k) =>
+        vi.spyOn(console, k).mockImplementation((...a: unknown[]) => {
+          logged.push(a.map(String).join(" "));
+        }),
+      );
+      try {
+        // First time: the box, with "Save for next time" ticked by default.
+        const first = await browseTask(
+          cookie,
+          { result: "NEEDS_SIGN_IN: Please sign in." },
+          { result: "Signed in. 3 unread." },
+        );
+        const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+        expect(asking.browsers[0]).toMatchObject({
+          label: "Waiting for you",
+          ask: { kind: "sign_in", site: "example.com", problem: null, savedAccount: null },
+        });
+        const sent = await send(cookie, asking.browsers[0].id, {
+          username: "me@example.com",
+          password: PASSWORD,
+        });
+        expect(sent.statusCode).toBe(200);
+        expect(sent.body).not.toContain(PASSWORD);
+        const done = await pollUntilDone(cookie, first);
+        expect(done.message.browsers[0].note).toBe(
+          "Signed in to example.com. Your login is saved for next time",
+        );
+        expect(await saved(userId)).toMatchObject([
+          { site: "example.com", account: "me@example.com", last_result: "worked" },
+        ]);
+
+        // Next time: no box. The saved login goes straight to the browser, for that site only.
+        const second = await browseTask(
+          cookie,
+          { result: "NEEDS_SIGN_IN: Please sign in." },
+          { result: "Signed in. 3 unread." },
+        );
+        const run = await pollUntilDone(cookie, second);
+        expect(run.message.browsers[0]).toMatchObject({
+          status: "done",
+          note: "Signed in to example.com with your saved login",
+        });
+        const filled = lastRun().input;
+        expect(filled.secrets).toEqual([
+          { alias: "login_username", value: "me@example.com", allowedDomains: ["example.com"] },
+          { alias: "login_password", value: PASSWORD, allowedDomains: ["example.com"] },
+        ]);
+        expect(filled.task).not.toContain(PASSWORD);
+        const result = travila.submitted.at(-1)!.results[0]!.resultJson as Record<string, string>;
+        expect(result.sign_in).toBe("Signed in to example.com with your saved login");
+        expect(await actions(userId)).toEqual(["saved", "worked", "used", "worked"]);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+
+      // The password is nowhere we keep things: chats, memory, files, cards, the audit log,
+      // what went to the model, or the logs. In the vault it is only ever sealed.
+      const hex = Buffer.from(PASSWORD).toString("hex");
+      const tables = await sql!<{ table_schema: string; table_name: string }[]>`
+        SELECT table_schema, table_name FROM information_schema.tables
+        WHERE table_schema IN ('public', 'vault') AND table_type = 'BASE TABLE'`;
+      expect(tables.length).toBeGreaterThan(10);
+      for (const t of tables) {
+        const [hit] = await sql!<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM ${sql!(t.table_schema)}.${sql!(t.table_name)} r
+          WHERE row_to_json(r)::text LIKE ${"%" + PASSWORD + "%"}
+             OR row_to_json(r)::text LIKE ${"%" + hex + "%"}`;
+        expect(hit!.n, `${t.table_schema}.${t.table_name}`).toBe(0);
+      }
+      expect(JSON.stringify(travila.submitted)).not.toContain(PASSWORD);
+      expect(JSON.stringify([...travila.threads.values(), travila.memories])).not.toContain(
+        PASSWORD,
+      );
+      expect(logged.join("\n")).not.toContain(PASSWORD);
+
+      // Requests (and so the assistant) run as app_user, which can't open the vault at all.
+      await expect(
+        withUser(sql!, userId, (tx) => tx`SELECT * FROM vault.credentials`),
+      ).rejects.toThrow(/permission denied/);
+      // People can read their own activity, never someone else's.
+      const mine = await withUser(sql!, userId, (tx) => tx`SELECT action FROM audit_events`);
+      expect(mine).toHaveLength(4);
+      const other = await userOf(await signUp());
+      expect(await withUser(sql!, other, (tx) => tx`SELECT * FROM audit_events`)).toHaveLength(0);
+    });
+
+    it("says when the site rejects the saved login, and the new one replaces it", async () => {
+      const cookie = await signUp();
+      const userId = await userOf(cookie);
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "me", password: "old-pass-1" });
+      await pollUntilDone(cookie, first);
+
+      // The password changed: the saved login is tried, turned down, and the box says so.
+      const second = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "NEEDS_SIGN_IN: Incorrect username or password." },
+        { result: "Signed in. 3 unread." },
+      );
+      const rejected = await pollUntil(cookie, second, (r) => r.browsers[0]?.ask);
+      expect(rejected.browsers[0]).toMatchObject({
+        status: "needs_user",
+        label: "Waiting for you",
+        failed: false,
+        ask: { kind: "sign_in", site: "example.com", problem: "saved_rejected" },
+      });
+      expect((await saved(userId))[0]!.last_result).toBe("rejected");
+      await send(cookie, rejected.browsers[0].id, { username: "me", password: "new-pass-2" });
+      await pollUntilDone(cookie, second);
+      const logins = await saved(userId);
+      expect(logins).toHaveLength(1);
+      expect(logins[0]!.last_result).toBe("worked");
+
+      // A rejected login isn't tried again by itself; the replaced one is.
+      const third = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      await pollUntilDone(cookie, third);
+      expect(lastRun().input.secrets?.find((b) => b.alias === "login_password")?.value).toBe(
+        "new-pass-2",
+      );
+      expect(await actions(userId)).toEqual([
+        "saved",
+        "worked",
+        "used",
+        "rejected",
+        "replaced",
+        "worked",
+        "used",
+        "worked",
+      ]);
+    });
+
+    it("keeps nothing when unticked, and asks first when the login is set to ask", async () => {
+      const cookie = await signUp();
+      const userId = await userOf(cookie);
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { password: "once-only", save: false });
+      const done = await pollUntilDone(cookie, first);
+      expect(done.message.browsers[0].note).toBe("Signed in to example.com");
+      expect(await saved(userId)).toHaveLength(0);
+
+      // A login set to "Ask before using" is offered in the box instead of filled.
+      const second = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const box = await pollUntil(cookie, second, (r) => r.browsers[0]?.ask);
+      await send(cookie, box.browsers[0].id, { username: "bank-me", password: "bank-pass" });
+      await pollUntilDone(cookie, second);
+      await sql!`UPDATE vault.credentials SET ask_before_use = true WHERE user_id = ${userId}`;
+      const third = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const offered = await pollUntil(cookie, third, (r) => r.browsers[0]?.ask);
+      expect(offered.browsers[0].ask).toMatchObject({ savedAccount: "bank-me", problem: null });
+      const runsBefore = browser.runs.size;
+      expect((await send(cookie, offered.browsers[0].id, { useSaved: true })).statusCode).toBe(200);
+      expect(browser.runs.size).toBe(runsBefore + 1);
+      expect(lastRun().input.secrets?.find((b) => b.alias === "login_password")?.value).toBe(
+        "bank-pass",
+      );
+      const run = await pollUntilDone(cookie, third);
+      expect(run.message.browsers[0].note).toBe("Signed in to example.com with your saved login");
+    });
   });
 
   it("says when a site blocks the browser, and the assistant answers without it", async () => {

@@ -41,6 +41,12 @@ export function BrowserCard({
           <span>{statusLine(browser)}</span>
         </div>
       </div>
+      {browser.note && (
+        <p className="bcard-note">
+          <CheckIcon />
+          {browser.note}
+        </p>
+      )}
       {browser.status === "needs_user" && browser.ask && (
         <SignInBox browser={browser} onChange={onChange} onTakeControl={onTakeControl} />
       )}
@@ -77,7 +83,9 @@ export function BrowserCard({
 
 /**
  * The secure sign-in box. What is typed here goes straight to the browser, which types it only
- * into the site it is on; the assistant never sees it and nothing keeps it.
+ * into the site it is on; the assistant never sees it. With "Save for next time" (ticked by
+ * default) it is also saved in the person's vault, so next time it fills in by itself. It is a
+ * normal login form, so a password manager on the device offers to fill it.
  */
 function SignInBox({
   browser,
@@ -88,22 +96,19 @@ function SignInBox({
   onChange: (view: BrowserView) => void;
   onTakeControl: () => void;
 }) {
-  const { kind, site } = browser.ask!;
+  const { kind, site, problem, savedAccount } = browser.ask!;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [save, setSave] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function send(input: Parameters<typeof api.signInBrowser>[1]) {
     setBusy(true);
     setError(null);
     try {
-      const { browser: view } = await api.signInBrowser(
-        browser.id,
-        kind === "sign_in" ? { username, password } : { code },
-      );
+      const { browser: view } = await api.signInBrowser(browser.id, input);
       setPassword("");
       setCode("");
       onChange(view);
@@ -114,12 +119,42 @@ function SignInBox({
     }
   }
 
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    void send(kind === "sign_in" ? { username, password, save } : { code });
+  }
+
   return (
     <form className="bsign" onSubmit={submit} aria-label={`Sign in to ${site}`}>
       <p className="bsign-title">
         {kind === "sign_in" ? `Sign in to ${site}` : `Enter the code from ${site}`}
       </p>
-      {browser.needsUser && <p className="bsign-ask">{browser.needsUser}</p>}
+      {problem ? (
+        <p className="bsign-problem" role="alert">
+          {problem === "saved_rejected"
+            ? `${site} rejected the saved login. Type the new one and it will replace the old one.`
+            : `${site} didn't accept that sign-in. Check it and try again.`}
+        </p>
+      ) : (
+        browser.needsUser && <p className="bsign-ask">{browser.needsUser}</p>
+      )}
+      {kind === "sign_in" && savedAccount !== null && (
+        <div className="bsign-saved">
+          <p>
+            You have a saved login for {site}
+            {savedAccount ? ` (${savedAccount})` : ""}, set to ask before using it.
+          </p>
+          <button
+            type="button"
+            className="btn btn-accent bsign-submit"
+            onClick={() => void send({ useSaved: true })}
+            disabled={busy}
+          >
+            Use saved login
+          </button>
+          <p className="bsign-or">Or type a different one</p>
+        </div>
+      )}
       {kind === "sign_in" ? (
         <>
           <label className="bsign-field">
@@ -143,6 +178,10 @@ function SignInBox({
               onChange={(e) => setPassword(e.target.value)}
               maxLength={1000}
             />
+          </label>
+          <label className="bsign-check">
+            <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+            <span>Save for next time</span>
           </label>
         </>
       ) : (
@@ -168,7 +207,9 @@ function SignInBox({
         {busy ? "Sending…" : kind === "sign_in" ? "Sign in" : "Send code"}
       </button>
       <p className="bsign-note">
-        Typed only into {site}. The assistant never sees it, and it isn&apos;t kept.
+        {kind === "sign_in" && save
+          ? `Typed only into ${site} and saved in your vault. The assistant never sees it. Untick to use it once.`
+          : `Typed only into ${site}. The assistant never sees it, and it isn't kept.`}
       </p>
       <button type="button" className="bsign-alt" onClick={onTakeControl} disabled={busy}>
         Or take control of the browser and do it yourself
@@ -358,6 +399,21 @@ function GlobeIcon() {
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg className="bcard-note-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M5 12.5l4.5 4.5L19 7.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

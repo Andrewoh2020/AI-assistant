@@ -996,6 +996,50 @@ code {
 .bsign-submit {
   width: 100%;
 }
+.bsign-problem {
+  color: var(--danger);
+  font-size: var(--type-small-size);
+}
+.bsign-saved {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--type-small-size);
+}
+.bsign-or {
+  color: var(--ink-2);
+  padding-top: 2px;
+}
+.bsign-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: var(--type-small-size);
+  cursor: pointer;
+}
+.bsign-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+/* "Signed in to github.com with your saved login" */
+.bcard-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+  overflow-wrap: anywhere;
+}
+.bcard-note-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
 .bsign-alt {
   border: 0;
   background: none;

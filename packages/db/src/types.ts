@@ -146,10 +146,41 @@ export interface BrowserSessionRow {
   ask_kind: "sign_in" | "code" | null;
   /** The site the sign-in or code will be typed into (from the page the browser is on). */
   ask_site: string | null;
+  /** The last sign-in sent to the site: typed in the box, or a saved login from the vault. */
+  sign_in_by: "typed" | "saved" | null;
+  sign_in_site: string | null;
+  /** The saved login that sign-in used or created (never the login itself). */
+  vault_credential_id: string | null;
+  /** "Signed in to github.com with your saved login" */
+  sign_in_note: string | null;
+  /** Why the box is showing again: the site turned down the last sign-in. */
+  ask_problem: "saved_rejected" | "typed_rejected" | null;
+  /** A saved login the person asked to approve first: its account ('' for none), else null. */
+  ask_saved_account: string | null;
 }
 
 export interface BrowserTab {
   url: string;
   title: string | null;
   active: boolean;
+}
+
+export interface AuditEventRow {
+  id: string;
+  user_id: string;
+  created_at: Date;
+  action:
+    | "saved"
+    | "replaced"
+    | "used"
+    | "worked"
+    | "rejected"
+    | "deleted"
+    | "imported"
+    | "ask_on"
+    | "ask_off";
+  site: string | null;
+  account: string | null;
+  detail: string | null;
+  browser_session_id: string | null;
 }

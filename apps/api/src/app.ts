@@ -29,6 +29,7 @@ import {
 import type { Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila } from "./travila.js";
+import { vaultKeyFrom } from "./vault.js";
 
 const COOKIE = "aia_session";
 const SESSION_DAYS = 30;
@@ -68,12 +69,14 @@ function isTimezone(tz: unknown): tz is string {
  */
 export function buildApp(deps: AppDeps): FastifyInstance {
   const { config, sql } = deps;
+  const vaultKey = vaultKeyFrom(config.vaultMasterKey, config.sessionSecret);
   const orchestratorDeps: Deps = {
     sql,
     travila: deps.travila,
     search: deps.search,
     browser: deps.browser,
     secret: config.sessionSecret,
+    vaultKey,
     defer: deps.defer,
     resolve: deps.resolve,
     browserCheckGapMs: deps.browserCheckGapMs,
@@ -384,6 +387,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     browser: deps.browser,
     secret: config.sessionSecret,
     checkGapMs: deps.browserCheckGapMs,
+    vaultKey,
   });
 
   app.post<{ Params: { id: string } }>("/browser-sessions/:id/take-over", async (req, reply) => {
@@ -403,10 +407,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   // The secure sign-in box. The body holds a password: it is passed straight on to Browser Use
-  // and never logged, stored or echoed back.
+  // (and, when saved, sealed in the vault) and never logged, stored elsewhere or echoed back.
   app.post<{
     Params: { id: string };
-    Body: { username?: string; password?: string; code?: string };
+    Body: {
+      username?: string;
+      password?: string;
+      code?: string;
+      save?: boolean;
+      useSaved?: boolean;
+    };
   }>(
     "/browser-sessions/:id/sign-in",
     {
@@ -418,6 +428,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
             username: { type: "string", maxLength: 1000 },
             password: { type: "string", maxLength: 1000 },
             code: { type: "string", maxLength: 64 },
+            save: { type: "boolean" },
+            useSaved: { type: "boolean" },
           },
         },
       },
