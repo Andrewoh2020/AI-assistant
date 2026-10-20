@@ -29,7 +29,7 @@ import {
 import type { Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila } from "./travila.js";
-import { vaultKeyFrom } from "./vault.js";
+import { deleteLogin, listLogins, setAskBeforeUse, vaultActivity, vaultKeyFrom } from "./vault.js";
 
 const COOKIE = "aia_session";
 const SESSION_DAYS = 30;
@@ -443,6 +443,51 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return { browser: viewOf(row, config.sessionSecret) };
     },
   );
+
+  // Vault page -------------------------------------------------------------------------
+  // Saved logins as the person manages them in Settings: never the usernames or passwords.
+
+  app.get("/vault", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    const [logins, activity] = await Promise.all([
+      listLogins(sql, s.userId),
+      vaultActivity(sql, s.userId),
+    ]);
+    reply.header("Cache-Control", "no-store");
+    return { logins, activity };
+  });
+
+  app.patch<{ Params: { id: string }; Body: { askBeforeUse: boolean } }>(
+    "/vault/logins/:id",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["askBeforeUse"],
+          properties: { askBeforeUse: { type: "boolean" } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+      if (!(await setAskBeforeUse(sql, s.userId, req.params.id, req.body.askBeforeUse))) {
+        throw new NotFound("saved login");
+      }
+      return { ok: true };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/vault/logins/:id", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+    if (!(await deleteLogin(sql, s.userId, req.params.id))) throw new NotFound("saved login");
+    return { ok: true };
+  });
 
   return app;
 }

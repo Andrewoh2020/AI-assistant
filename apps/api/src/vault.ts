@@ -7,6 +7,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { withVault, type AuditEventRow, type Sql, type TransactionSql } from "@ai-assistant/db";
+import type { VaultEvent, VaultLogin } from "@ai-assistant/api-client";
 
 /**
  * The vault service: the only code that can open saved logins. The rest of the app, and so the
@@ -38,13 +39,10 @@ export function vaultKeyFrom(masterKey: string, sessionSecret: string): VaultKey
 }
 
 /** A saved login as everyone outside the vault sees it: no username or password. */
-export interface SavedLogin {
-  id: string;
-  site: string;
-  account: string;
-  askBeforeUse: boolean;
-  lastResult: "worked" | "rejected" | null;
-}
+export type SavedLogin = Pick<
+  VaultLogin,
+  "id" | "site" | "account" | "askBeforeUse" | "lastResult"
+>;
 
 interface CredentialRow {
   id: string;
@@ -236,9 +234,82 @@ export async function recordResult(
 ): Promise<void> {
   await withVault(sql, userId, async (tx) => {
     const [row] = await tx<CredentialRow[]>`
-      UPDATE vault.credentials SET last_result = ${result}, last_result_at = now()
+      UPDATE vault.credentials SET last_result = ${result}, last_result_at = now(), last_used_at = now()
       WHERE id = ${id}
       RETURNING *`;
     if (row) await audit(tx, userId, result, row.site, row.account, browserSessionId);
   });
+}
+
+// The Vault page (Settings). Only the person, signed in, reaches these; the assistant has no
+// tool that can change or delete a saved login.
+
+export async function listLogins(sql: Sql, userId: string): Promise<VaultLogin[]> {
+  const rows = await withVault(
+    sql,
+    userId,
+    (tx) => tx<
+      (CredentialRow & {
+        created_at: Date;
+        source: "typed" | "imported";
+        manager: string | null;
+        last_used_at: Date | null;
+        last_result_at: Date | null;
+      })[]
+    >`
+      SELECT c.*, b.manager FROM vault.credentials c
+      LEFT JOIN vault.import_batches b ON b.id = c.import_batch_id
+      ORDER BY c.site, c.account`,
+  );
+  return rows.map((r) => ({
+    ...summary(r),
+    source: r.source,
+    importedFrom: r.manager,
+    savedAt: r.created_at.toISOString(),
+    lastUsedAt: r.last_used_at?.toISOString() ?? null,
+    lastResultAt: r.last_result_at?.toISOString() ?? null,
+  }));
+}
+
+export async function setAskBeforeUse(
+  sql: Sql,
+  userId: string,
+  id: string,
+  ask: boolean,
+): Promise<boolean> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`
+      UPDATE vault.credentials SET ask_before_use = ${ask}, updated_at = now()
+      WHERE id = ${id} RETURNING *`;
+    if (!row) return false;
+    await audit(tx, userId, ask ? "ask_on" : "ask_off", row.site, row.account, null);
+    return true;
+  });
+}
+
+export async function deleteLogin(sql: Sql, userId: string, id: string): Promise<boolean> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`
+      DELETE FROM vault.credentials WHERE id = ${id} RETURNING *`;
+    if (!row) return false;
+    await audit(tx, userId, "deleted", row.site, row.account, null);
+    return true;
+  });
+}
+
+export async function vaultActivity(sql: Sql, userId: string, limit = 50): Promise<VaultEvent[]> {
+  const rows = await withVault(
+    sql,
+    userId,
+    (tx) => tx<AuditEventRow[]>`
+      SELECT * FROM audit_events ORDER BY created_at DESC, id LIMIT ${limit}`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    action: r.action,
+    site: r.site,
+    account: r.account,
+    detail: r.detail,
+    at: r.created_at.toISOString(),
+  }));
 }

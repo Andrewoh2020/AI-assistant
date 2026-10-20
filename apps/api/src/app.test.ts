@@ -1017,6 +1017,72 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       const run = await pollUntilDone(cookie, third);
       expect(run.message.browsers[0].note).toBe("Signed in to example.com with your saved login");
     });
+    it("lists saved logins in Settings without the password; only the owner changes them", async () => {
+      const cookie = await signUp();
+      const other = await signUp();
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "me@example.com", password: PASSWORD });
+      await pollUntilDone(cookie, first);
+
+      const page = await app.inject({ method: "GET", url: "/vault", headers: { cookie } });
+      expect(page.statusCode).toBe(200);
+      expect(page.body).not.toContain(PASSWORD);
+      const { logins, activity } = page.json();
+      expect(logins).toMatchObject([
+        {
+          site: "example.com",
+          account: "me@example.com",
+          askBeforeUse: false,
+          lastResult: "worked",
+          source: "typed",
+        },
+      ]);
+      expect(activity.map((e: { action: string }) => e.action)).toEqual(["worked", "saved"]);
+      const id = logins[0].id;
+      const theirs = (
+        await app.inject({ method: "GET", url: "/vault", headers: { cookie: other } })
+      ).json();
+      expect(theirs.logins).toEqual([]);
+
+      // Someone else can't change or delete it.
+      for (const req of [
+        { method: "PATCH" as const, url: `/vault/logins/${id}`, payload: { askBeforeUse: true } },
+        { method: "DELETE" as const, url: `/vault/logins/${id}` },
+      ]) {
+        expect((await app.inject({ ...req, headers: { cookie: other } })).statusCode).toBe(403);
+      }
+      const ask = await app.inject({
+        method: "PATCH",
+        url: `/vault/logins/${id}`,
+        headers: { cookie },
+        payload: { askBeforeUse: true },
+      });
+      expect(ask.statusCode).toBe(200);
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/vault/logins/${id}`,
+        headers: { cookie },
+      });
+      expect(del.statusCode).toBe(200);
+      const after = (
+        await app.inject({ method: "GET", url: "/vault", headers: { cookie } })
+      ).json();
+      expect(after.logins).toEqual([]);
+      expect(after.activity.slice(0, 2).map((e: { action: string }) => e.action)).toEqual([
+        "deleted",
+        "ask_on",
+      ]);
+
+      // Deleted means gone: next time the box asks again.
+      const next = await browseTask(cookie, { result: "NEEDS_SIGN_IN: Please sign in." });
+      const again = await pollUntil(cookie, next, (r) => r.browsers[0]?.ask);
+      expect(again.browsers[0].ask).toMatchObject({ problem: null, savedAccount: null });
+    });
   });
 
   it("says when a site blocks the browser, and the assistant answers without it", async () => {

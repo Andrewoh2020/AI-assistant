@@ -111,6 +111,44 @@ export interface ChatSummary {
   updatedAt: string;
 }
 
+/** A saved login on the Vault page. Never holds the username or password themselves. */
+export interface VaultLogin {
+  id: string;
+  /** The only site it is ever typed into, like "github.com". */
+  site: string;
+  /** The account as it was typed ('' when only a password was saved). */
+  account: string;
+  /** Asks in the sign-in box instead of filling in by itself. */
+  askBeforeUse: boolean;
+  /** Whether the site took it the last time it was used. */
+  lastResult: "worked" | "rejected" | null;
+  source: "typed" | "imported";
+  /** The password manager it was imported from. */
+  importedFrom: string | null;
+  savedAt: string;
+  lastUsedAt: string | null;
+  lastResultAt: string | null;
+}
+
+/** One line of the vault's activity log. */
+export interface VaultEvent {
+  id: string;
+  action:
+    | "saved"
+    | "replaced"
+    | "used"
+    | "worked"
+    | "rejected"
+    | "deleted"
+    | "imported"
+    | "ask_on"
+    | "ask_off";
+  site: string | null;
+  account: string | null;
+  detail: string | null;
+  at: string;
+}
+
 export interface Me {
   userId: string;
   displayName: string | null;
@@ -195,6 +233,10 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
       if (!res.ok) throw new ApiError(res.status, data.error ?? `Upload failed (${res.status})`);
       return data as { file: FileView };
     },
+    vault: () => call<{ logins: VaultLogin[]; activity: VaultEvent[] }>("GET", "/vault"),
+    updateVaultLogin: (id: string, input: { askBeforeUse: boolean }) =>
+      call<{ ok: true }>("PATCH", `/vault/logins/${id}`, input),
+    deleteVaultLogin: (id: string) => call<{ ok: true }>("DELETE", `/vault/logins/${id}`),
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
     /** Shows an image file in the page (browser pictures). */
     fileViewUrl: (id: string) => `${baseUrl}/files/${id}/view`,

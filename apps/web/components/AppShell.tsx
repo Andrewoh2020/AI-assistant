@@ -27,6 +27,7 @@ import { Answer } from "./Answer";
 import { BrowserCard, BrowserPanel } from "./BrowserCard";
 import { FileChip, FileList, PaperclipIcon } from "./Files";
 import { Menu, MenuItem } from "./Menu";
+import { Settings, VaultIcon } from "./Settings";
 
 const POLL_MS = 1500;
 
@@ -61,6 +62,7 @@ export function AppShell({ chatId }: { chatId: string }) {
   const panelToggleRef = useRef<HTMLAnchorElement>(null);
   // The browser shown in the right-hand preview panel.
   const [preview, setPreview] = useState<{ id: string; takeControl: boolean } | null>(null);
+  const [settings, setSettings] = useState<"home" | "vault" | null>(null);
   // The chat list opens over the chat (not beside it) when it isn't kept visible, or while the
   // browser preview takes the room.
   const floating = !keepPanel || !!preview;
@@ -445,9 +447,28 @@ export function AppShell({ chatId }: { chatId: string }) {
           ))}
         </div>
         <Menu label="Menu" trigger={<MenuIcon />} className="rail-menu" buttonClassName="rail-btn">
-          {() => (
+          {(close) => (
             <>
               <p className="menu-who">{me?.displayName || me?.email}</p>
+              <MenuItem
+                icon={<SettingsIcon />}
+                onSelect={() => {
+                  setSettings("home");
+                  close();
+                }}
+              >
+                Settings
+              </MenuItem>
+              <MenuItem
+                icon={<VaultIcon />}
+                onSelect={() => {
+                  setSettings("vault");
+                  close();
+                }}
+              >
+                Saved logins
+              </MenuItem>
+              <hr className="menu-divider" />
               <MenuItem icon={<SignOutIcon />} onSelect={signOut}>
                 Sign out
               </MenuItem>
@@ -561,6 +582,15 @@ export function AppShell({ chatId }: { chatId: string }) {
             <MenuIcon />
           </button>
           <h1>{chat ? (chat.kind === "main" ? "Main chat" : chat.title || "Side chat") : ""}</h1>
+          {/* Phones have no rail, so Settings sits in the header, as in Muse's app. */}
+          <button
+            className="btn btn-secondary btn-round nav-toggle head-settings"
+            type="button"
+            aria-label="Settings"
+            onClick={() => setSettings("home")}
+          >
+            <SettingsIcon />
+          </button>
         </header>
 
         {working && (
@@ -727,6 +757,9 @@ export function AppShell({ chatId }: { chatId: string }) {
           </div>
         </form>
       </main>
+      {settings && (
+        <Settings start={settings} onClose={() => setSettings(null)} onSignOut={signOut} />
+      )}
       {previewBrowser && (
         <BrowserPanel
           browser={previewBrowser}
@@ -889,6 +922,9 @@ const COMING_SOON = [
 ];
 const ArchiveIcon = () => (
   <Icon d="M4 5h16v4H4V5Zm1 4v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4" />
+);
+const SettingsIcon = () => (
+  <Icon d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 13.5l1.6 1.2-2 3.4-1.9-.7a7 7 0 0 1-2 1.2L14.8 21h-4l-.3-2.4a7 7 0 0 1-2-1.2l-1.9.7-2-3.4 1.6-1.2a7 7 0 0 1 0-3L4.6 9.3l2-3.4 1.9.7a7 7 0 0 1 2-1.2L10.8 3h4l.3 2.4a7 7 0 0 1 2 1.2l1.9-.7 2 3.4-1.6 1.2a7 7 0 0 1 0 3Z" />
 );
 const SignOutIcon = () => (
   <Icon d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h10" />
