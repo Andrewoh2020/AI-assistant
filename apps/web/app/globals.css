@@ -344,6 +344,13 @@ code {
   top: 46px;
   min-width: 270px;
 }
+/* The rail's bottom menu opens upward, beside the rail. */
+.rail-menu .menu {
+  top: auto;
+  bottom: 0;
+  left: 52px;
+  min-width: 220px;
+}
 .row-menu .menu {
   left: auto;
   right: 0;

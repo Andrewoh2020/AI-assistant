@@ -10,11 +10,13 @@ export function Menu({
   label,
   trigger,
   className,
+  buttonClassName = "icon-btn",
   children,
 }: {
   label: string;
   trigger: ReactNode;
   className?: string;
+  buttonClassName?: string;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -39,7 +41,7 @@ export function Menu({
   return (
     <div className={`more ${className ?? ""}`} ref={root}>
       <button
-        className="icon-btn"
+        className={buttonClassName}
         type="button"
         aria-label={label}
         title={label}
