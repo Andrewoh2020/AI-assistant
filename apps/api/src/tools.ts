@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { withUser, type Sql } from "@ai-assistant/db";
 import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
+import { READ_CHUNK_CHARS } from "./files.js";
 import { decide, type Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
@@ -221,6 +222,30 @@ export async function runTool(
       };
     }
 
+    if (call.name === "read_file") {
+      const fileId = String(args.file_id);
+      const start = Math.max(0, Math.floor(Number(args.start) || 0));
+      const [row] = await withUser(
+        ctx.sql,
+        ctx.userId,
+        (tx) => tx<{ name: string | null; text: string | null; pages: number | null }[]>`
+          SELECT f.name, t.text, t.pages FROM files f
+          LEFT JOIN file_texts t ON t.file_id = f.id WHERE f.id = ${fileId}`,
+      );
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      if (!row) return { error: "No file with that file_id." };
+      if (!row.text) return { name: row.name, error: "No text could be read from this file." };
+      const chunk = row.text.slice(start, start + READ_CHUNK_CHARS);
+      const end = start + chunk.length;
+      return {
+        name: row.name,
+        pages: row.pages ?? undefined,
+        total_characters: row.text.length,
+        content: fence(`attached file "${row.name}", characters ${start}-${end}`, chunk),
+        next_start: end < row.text.length ? end : null,
+      };
+    }
+
     // memory_search
     const memories = await deps.travila.searchMemories(ctx.travilaUserId, String(args.query), 5);
     await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
@@ -248,6 +273,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (searches.length === 1)
     return `Searching: ${String(searches[0]!.argumentsJson?.query ?? "").slice(0, 80)}`;
   if (searches.length > 1) return `Running ${searches.length} searches`;
+  if (calls.some((c) => c.name === "read_file")) return "Reading your file";
   if (calls.some((c) => c.name === "memory_search")) return "Checking what I remember";
   return "Working";
 }

@@ -12,7 +12,7 @@ export type Resolver = (host: string) => Promise<string[]>;
 const defaultResolver: Resolver = async (host) =>
   (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
-const ALLOWED_TOOLS = new Set(["web_search", "fetch_page", "browse", "memory_search"]);
+const ALLOWED_TOOLS = new Set(["web_search", "fetch_page", "browse", "read_file", "memory_search"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function decide(
@@ -33,11 +33,19 @@ export async function decide(
     }
     return { decision: "allow" };
   }
+  if (tool === "read_file") {
+    // Row-level security keeps it to the user's own files; this only checks the shape.
+    if (typeof args.file_id !== "string" || !UUID.test(args.file_id))
+      return { decision: "deny", reason: "file_id must be a file id" };
+    return { decision: "allow" };
+  }
   if (tool === "browse") {
     const task = args.task;
     if (typeof task !== "string" || !task.trim())
       return { decision: "deny", reason: "task is required" };
     if (task.length > 4000) return { decision: "deny", reason: "task is too long" };
+    if (args.title !== undefined && (typeof args.title !== "string" || args.title.length > 80))
+      return { decision: "deny", reason: "title must be a short name" };
     const ids = args.file_ids ?? [];
     if (
       !Array.isArray(ids) ||
