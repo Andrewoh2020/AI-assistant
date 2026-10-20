@@ -309,6 +309,48 @@ export function AppShell({ chatId }: { chatId: string }) {
     }
   }
 
+  // Dragging files over the window turns the message box into a drop target, like Muse.
+  const [dragging, setDragging] = useState(false);
+  const attachRef = useRef(attach);
+  attachRef.current = attach;
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+    const onEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth++;
+      setDragging(true);
+    };
+    const onLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDragging(false);
+    };
+    const onOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      // Without this the browser would open the file instead of handing it to us.
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      void attachRef.current(e.dataTransfer?.files ?? null);
+    };
+    window.addEventListener("dragenter", onEnter);
+    window.addEventListener("dragleave", onLeave);
+    window.addEventListener("dragover", onOver);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onEnter);
+      window.removeEventListener("dragleave", onLeave);
+      window.removeEventListener("dragover", onOver);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, []);
+
   async function stop() {
     if (!activeRunId) return;
     try {
@@ -690,7 +732,13 @@ export function AppShell({ chatId }: { chatId: string }) {
               {uploading > 0 && <span className="file-chip file-chip-busy">Uploading…</span>}
             </div>
           )}
-          <div className="composer-box">
+          <div className={`composer-box ${dragging ? "is-dropping" : ""}`}>
+            {dragging && (
+              <div className="drop-hint" aria-live="polite">
+                <UploadIcon />
+                Drop files to attach
+              </div>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -965,6 +1013,21 @@ function ChatIcon() {
         d="M12 4c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7c-.9 0-1.8-.1-2.6-.3L5 19.5l1.2-3.4C4.6 14.8 3.5 13 3.5 11c0-3.9 3.8-7 8.5-7Z"
         stroke="currentColor"
         strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M7 18H6.5a4.5 4.5 0 0 1-.9-8.9 6 6 0 0 1 11.7-1A4.5 4.5 0 0 1 17.5 18H17M12 20v-8m0 0-3 3m3-3 3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
     </svg>

@@ -82,7 +82,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 64 * 1024 });
 
   app.register(cookie);
-  // File uploads arrive as the file's own bytes (any type other than JSON).
+  // File uploads arrive as the file's own bytes, sent as application/octet-stream with the real
+  // type in X-File-Type (so text and JSON files aren't parsed as a request body).
   app.addContentTypeParser(
     "*",
     { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES },
@@ -345,7 +346,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       const file = await saveFile(sql, s.userId, {
         kind: "upload",
         name: cleanFileName(name),
-        mime: String(req.headers["content-type"] ?? "application/octet-stream").split(";")[0]!,
+        mime: uploadType(req.headers),
         data,
         chatId: chatId ?? null,
       });
@@ -398,4 +399,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   return app;
+}
+
+/** The uploaded file's type: X-File-Type when it looks like a media type, else Content-Type. */
+function uploadType(headers: Record<string, string | string[] | undefined>): string {
+  const given = String(headers["x-file-type"] ?? "").trim();
+  if (/^[\w.+-]+\/[\w.+-]+$/.test(given)) return given.toLowerCase();
+  return String(headers["content-type"] ?? "application/octet-stream").split(";")[0]!;
 }

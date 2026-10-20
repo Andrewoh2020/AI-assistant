@@ -76,7 +76,12 @@ async function upload(cookie: string, name: string, type: string, data: Buffer) 
   return app.inject({
     method: "POST",
     url: "/files",
-    headers: { cookie, "content-type": type, "x-file-name": encodeURIComponent(name) },
+    headers: {
+      cookie,
+      "content-type": "application/octet-stream",
+      "x-file-type": type,
+      "x-file-name": encodeURIComponent(name),
+    },
     payload: data,
   });
 }
@@ -512,6 +517,24 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const [row] = await sql!`SELECT live_view_url_ciphertext FROM browser_sessions
                              WHERE run_id = ${runId}`;
     expect(row!.live_view_url_ciphertext).not.toContain("live.example");
+  });
+
+  it("uploads text and JSON files as they are", async () => {
+    const a = await signUp();
+    for (const [name, type, body] of [
+      ["notes.txt", "text/plain", "hello from a dropped file"],
+      ["data.json", "application/json", '{"a":1}'],
+    ] as const) {
+      const up = await upload(a, name, type, Buffer.from(body));
+      expect(up.statusCode).toBe(200);
+      expect(up.json().file).toMatchObject({ name, mime: type, bytes: body.length });
+      const down = await app.inject({
+        method: "GET",
+        url: `/files/${up.json().file.id}/download`,
+        headers: { cookie: a },
+      });
+      expect(down.body).toBe(body);
+    }
   });
 
   it("takes an uploaded PDF to the browser and keeps the original and the browser's file downloadable", async () => {
