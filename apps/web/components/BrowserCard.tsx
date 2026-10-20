@@ -1,7 +1,7 @@
 "use client";
 
 import { ApiError, type BrowserView } from "@ai-assistant/api-client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "@/lib/client";
 
 /**
@@ -20,6 +20,7 @@ export function BrowserCard({
   open,
   onOpen,
   onTakeControl,
+  onChange,
 }: {
   browser: BrowserView;
   /** This browser is showing in the panel. */
@@ -27,6 +28,7 @@ export function BrowserCard({
   onOpen: () => void;
   /** Opens the panel and takes control (for a sign-in). */
   onTakeControl: () => void;
+  onChange: (view: BrowserView) => void;
 }) {
   return (
     <section className="bcard" aria-label={`Browser: ${statusLine(browser)}`}>
@@ -39,7 +41,10 @@ export function BrowserCard({
           <span>{statusLine(browser)}</span>
         </div>
       </div>
-      {browser.status === "needs_user" && (
+      {browser.status === "needs_user" && browser.ask && (
+        <SignInBox browser={browser} onChange={onChange} onTakeControl={onTakeControl} />
+      )}
+      {browser.status === "needs_user" && !browser.ask && (
         <div className="bcard-ask" role="alert">
           <p>{browser.needsUser ?? "The browser needs you to sign in."}</p>
           <button type="button" className="btn btn-accent btn-small" onClick={onTakeControl}>
@@ -67,6 +72,108 @@ export function BrowserCard({
         {open ? "Showing in preview" : "Open preview"}
       </button>
     </section>
+  );
+}
+
+/**
+ * The secure sign-in box. What is typed here goes straight to the browser, which types it only
+ * into the site it is on; the assistant never sees it and nothing keeps it.
+ */
+function SignInBox({
+  browser,
+  onChange,
+  onTakeControl,
+}: {
+  browser: BrowserView;
+  onChange: (view: BrowserView) => void;
+  onTakeControl: () => void;
+}) {
+  const { kind, site } = browser.ask!;
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const { browser: view } = await api.signInBrowser(
+        browser.id,
+        kind === "sign_in" ? { username, password } : { code },
+      );
+      setPassword("");
+      setCode("");
+      onChange(view);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "That didn't work. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="bsign" onSubmit={submit} aria-label={`Sign in to ${site}`}>
+      <p className="bsign-title">
+        {kind === "sign_in" ? `Sign in to ${site}` : `Enter the code from ${site}`}
+      </p>
+      {browser.needsUser && <p className="bsign-ask">{browser.needsUser}</p>}
+      {kind === "sign_in" ? (
+        <>
+          <label className="bsign-field">
+            <span>Email or username</span>
+            <input
+              name="username"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              maxLength={1000}
+            />
+          </label>
+          <label className="bsign-field">
+            <span>Password</span>
+            <input
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              maxLength={1000}
+            />
+          </label>
+        </>
+      ) : (
+        <label className="bsign-field">
+          <span>Code</span>
+          <input
+            name="code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            required
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            maxLength={64}
+          />
+        </label>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button type="submit" className="btn btn-accent bsign-submit" disabled={busy}>
+        {busy ? "Sending…" : kind === "sign_in" ? "Sign in" : "Send code"}
+      </button>
+      <p className="bsign-note">
+        Typed only into {site}. The assistant never sees it, and it isn&apos;t kept.
+      </p>
+      <button type="button" className="bsign-alt" onClick={onTakeControl} disabled={busy}>
+        Or take control of the browser and do it yourself
+      </button>
+    </form>
   );
 }
 

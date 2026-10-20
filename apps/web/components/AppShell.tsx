@@ -372,6 +372,7 @@ export function AppShell({ chatId }: { chatId: string }) {
         open={preview?.id === b.id}
         onOpen={() => setPreview({ id: b.id, takeControl: false })}
         onTakeControl={() => setPreview({ id: b.id, takeControl: true })}
+        onChange={updateBrowser}
       />
     ));
   }

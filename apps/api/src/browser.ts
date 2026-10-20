@@ -1,10 +1,16 @@
 import { BROWSER_INSTRUCTIONS } from "@ai-assistant/agent";
-import { withUser, type BrowserSessionRow, type FileRow, type Sql } from "@ai-assistant/db";
+import {
+  withUser,
+  type BrowserSessionRow,
+  type BrowserTab,
+  type FileRow,
+  type Sql,
+} from "@ai-assistant/db";
 import type { BrowserView } from "@ai-assistant/api-client";
 import { openSecret, sealSecret } from "./auth.js";
 import { isTerminal, type BrowserUse, type BuEvent } from "./browseruse.js";
 import { MAX_FILE_BYTES, mimeFor, readFile, saveFile } from "./files.js";
-import { Conflict, NotFound } from "./errors.js";
+import { BadRequest, Conflict, NotFound } from "./errors.js";
 import { detectInjection, fence } from "./untrusted.js";
 
 /**
@@ -234,11 +240,15 @@ export function jobTitle(given: unknown, task: string): string {
  * Takes a picture of the page the browser is showing, for the card and for after it closes,
  * and notes its tabs. Best effort: a browser that has just closed simply keeps its last picture.
  */
-async function takePicture(deps: BrowserDeps, ctx: BrowseContext, s: BrowserSessionRow) {
-  if (!s.bu_browser_id) return;
+async function takePicture(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+): Promise<BrowserTab[] | null> {
+  if (!s.bu_browser_id) return null;
   try {
     const shot = await deps.browser.capture(s.bu_browser_id);
-    if (!shot) return;
+    if (!shot) return null;
     const file = await saveFile(deps.sql, ctx.userId, {
       kind: "generated",
       name: "browser.jpg",
@@ -255,9 +265,11 @@ async function takePicture(deps: BrowserDeps, ctx: BrowseContext, s: BrowserSess
                WHERE id = ${s.id}`;
       if (old?.screenshot_file_id) await tx`DELETE FROM files WHERE id = ${old.screenshot_file_id}`;
     });
+    return shot.tabs;
   } catch (err) {
     // Never log the error's details: they could carry the browser's address.
     console.error(`browse ${s.id}: no picture of the page (${(err as Error).name})`);
+    return null;
   }
 }
 
@@ -454,14 +466,30 @@ export async function advanceBrowse(
     const why = report.slice("BLOCKED:".length).trim().split("\n")[0]!.slice(0, 200);
     return fail(`The website blocked the browser${why ? `: ${why}` : "."}`, { blocked: true });
   }
-  if (report.startsWith("NEEDS_USER:")) {
-    const ask = plainAsk(report.slice("NEEDS_USER:".length));
-    await takePicture(deps, ctx, current);
+  const asking = /^(NEEDS_SIGN_IN|NEEDS_CODE|NEEDS_USER):/.exec(report);
+  if (asking) {
+    const ask = plainAsk(report.slice(asking[0].length));
+    const tabs = await takePicture(deps, ctx, current);
+    // Where a sign-in may be typed comes from the page the browser is really on, never from
+    // the agent's words (a page could talk the agent into naming another site).
+    const site = hostOf(tabs?.find((t) => t.active)?.url);
+    const kind =
+      site && asking[1] === "NEEDS_SIGN_IN"
+        ? "sign_in"
+        : site && asking[1] === "NEEDS_CODE"
+          ? "code"
+          : null;
     await update(
       deps,
       ctx,
       s.id,
-      { status: "needs_user", needs_user: ask || "The browser needs you.", waiting_since: now },
+      {
+        status: "needs_user",
+        needs_user: ask || "The browser needs you.",
+        ask_kind: kind,
+        ask_site: kind ? site : null,
+        waiting_since: now,
+      },
       ["running"],
     );
     return null;
@@ -578,10 +606,105 @@ export async function handBack(deps: BrowserDeps, userId: string, id: string) {
         bu_run_id: run.id,
         events_after: 0,
         needs_user: null,
+        ask_kind: null,
+        ask_site: null,
         waiting_since: null,
         step: "Continuing from where you left it",
       },
       ["user_control", "needs_user"],
+    )) ?? s
+  );
+}
+
+/** Longest sign-in value accepted (Browser Use's limit is 4096 bytes). */
+const MAX_SECRET_CHARS = 1000;
+
+/**
+ * The secure sign-in box: the person's sign-in (or one-time code) goes straight to Browser Use
+ * with a follow-up run, which types it into the page. Only for the site the browser was on when
+ * it asked. Neither we nor the agent ever see or keep the values: Browser Use types them in by
+ * name, and only on that site.
+ */
+export async function signIn(
+  deps: BrowserDeps,
+  userId: string,
+  id: string,
+  input: { username?: string; password?: string; code?: string },
+) {
+  const s = await owned(deps, userId, id);
+  const ctx = { userId, runId: s.run_id ?? "" };
+  if (s.status !== "needs_user" || !s.ask_kind || !s.ask_site) {
+    throw new Conflict("The browser isn't asking for a sign-in.");
+  }
+  const site = s.ask_site;
+  const bind = (alias: string, value: string) => ({ alias, value, allowedDomains: [site] });
+  let secrets;
+  let task;
+  if (s.ask_kind === "sign_in") {
+    const username = input.username?.trim() ?? "";
+    const password = input.password ?? "";
+    if (!password || password.length > MAX_SECRET_CHARS || username.length > MAX_SECRET_CHARS) {
+      throw new BadRequest("Enter your password.");
+    }
+    secrets = [
+      ...(username ? [bind("login_username", username)] : []),
+      bind("login_password", password),
+    ];
+    task = [
+      `The person has given you their sign-in for ${site}.`,
+      username
+        ? 'Their username or email is the secret named "login_username" and their password is the secret named "login_password".'
+        : 'Their password is the secret named "login_password" (the username is already filled in or remembered).',
+      "You can't see the values: ask for a secret by its name to have it typed into the field that has focus.",
+      `Type them into the sign-in form on ${site}, submit it, then continue and finish the original task, following the same rules.`,
+      'If the sign-in is refused, stop and make your final reply start with "NEEDS_SIGN_IN:" and say what the site showed. If the site asks for a one-time code, reply starting with "NEEDS_CODE:".',
+    ].join("\n");
+  } else {
+    const code = input.code?.replace(/\s+/g, "") ?? "";
+    if (!code || code.length > 64) throw new BadRequest("Enter the code.");
+    secrets = [bind("login_code", code)];
+    task = [
+      `The person has given you the one-time code ${site} asked for. It is the secret named "login_code".`,
+      "You can't see it: ask for the secret by its name to have it typed into the field that has focus.",
+      "Type it into the code field, submit it, then continue and finish the original task, following the same rules.",
+      'If the code is refused, stop and make your final reply start with "NEEDS_CODE:" and say what the site showed.',
+    ].join("\n");
+  }
+  let run;
+  try {
+    run = await deps.browser.createRun({
+      task,
+      secrets,
+      sessionId: s.bu_session_id!,
+      workspaceId: s.bu_workspace_id ?? undefined,
+      profileId: s.bu_profile_id ?? undefined,
+      maxCostUsd: MAX_COST_USD,
+      keepAlive: KEEP_ALIVE_S,
+    });
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 409)
+      throw new Conflict("The browser is still busy. Try again in a few seconds.");
+    // Never pass the error on: Browser Use's reply could repeat what was sent.
+    console.error(`browse ${s.id}: sign-in run didn't start (HTTP ${status ?? "?"})`);
+    throw new Conflict("The browser couldn't take your sign-in. Try again, or take control.");
+  }
+  return (
+    (await update(
+      deps,
+      ctx,
+      s.id,
+      {
+        status: "running",
+        bu_run_id: run.id,
+        events_after: 0,
+        needs_user: null,
+        ask_kind: null,
+        ask_site: null,
+        waiting_since: null,
+        step: s.ask_kind === "sign_in" ? `Signing in to ${site}` : "Entering your code",
+      },
+      ["needs_user"],
     )) ?? s
   );
 }
@@ -666,6 +789,10 @@ export function viewOf(s: BrowserSessionRow, secret: string): BrowserView {
     tabs,
     step: active ? s.step : null,
     needsUser: s.status === "needs_user" ? s.needs_user : null,
+    ask:
+      s.status === "needs_user" && s.ask_kind && s.ask_site
+        ? { kind: s.ask_kind, site: s.ask_site }
+        : null,
     liveUrl:
       active && s.live_view_url_ciphertext ? openSecret(s.live_view_url_ciphertext, secret) : null,
     screenshotId: s.screenshot_file_id,

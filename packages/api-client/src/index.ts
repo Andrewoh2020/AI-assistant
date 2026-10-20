@@ -52,6 +52,11 @@ export interface BrowserView {
   tabs: BrowserTabView[];
   step: string | null;
   needsUser: string | null;
+  /**
+   * The browser is asking for the person's sign-in (or a one-time code) for this site. It can be
+   * given in the secure sign-in box; it is typed only into that site and never seen by the AI.
+   */
+  ask: { kind: "sign_in" | "code"; site: string } | null;
   /** The live browser. Works like a password while the browser is open; never share it. */
   liveUrl: string | null;
   /** The last picture of the page, if there is one (see fileViewUrl). */
@@ -188,6 +193,9 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
       call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/take-over`, {}),
     handBackBrowser: (id: string) =>
       call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/hand-back`, {}),
+    /** The secure sign-in box. The values go to the browser only; nothing keeps them. */
+    signInBrowser: (id: string, input: { username?: string; password?: string; code?: string }) =>
+      call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/sign-in`, input),
   };
 }
 

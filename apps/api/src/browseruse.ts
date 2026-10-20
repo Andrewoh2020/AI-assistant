@@ -33,8 +33,19 @@ export interface BuFile {
   url?: string | null;
 }
 
+/** A credential the agent may have typed into a page without ever seeing it. */
+export interface SecretBinding {
+  /** The name the agent asks for it by, like "login_password". */
+  alias: string;
+  value: string;
+  /** Sites it may be typed into; a site covers its subdomains. */
+  allowedDomains: string[];
+}
+
 export interface CreateRunInput {
   task: string;
+  /** Kept only for this run; never stored by us. */
+  secrets?: SecretBinding[];
   sessionId?: string;
   workspaceId?: string;
   profileId?: string;
@@ -138,6 +149,11 @@ export class BrowserUseHttp implements BrowserUse {
         browserSettings: input.profileId ? { profileId: input.profileId } : undefined,
         maxCostUsd: input.maxCostUsd,
         keepAlive: input.keepAlive,
+        secretBindings: input.secrets?.map((b) => ({
+          alias: b.alias,
+          source: { type: "inline", value: b.value },
+          allowedDomains: b.allowedDomains,
+        })),
       },
       { retries: 0 },
     );

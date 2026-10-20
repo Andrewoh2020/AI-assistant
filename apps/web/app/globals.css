@@ -955,6 +955,57 @@ code {
   overflow-wrap: anywhere;
   font-size: var(--type-small-size);
 }
+/* The secure sign-in box inside the card. */
+.bsign {
+  margin-top: 12px;
+  background: var(--surface);
+  border-radius: var(--radius-m);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bsign p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.bsign-title {
+  font-weight: 650;
+}
+.bsign-ask,
+.bsign-note {
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+}
+.bsign-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--type-small-size);
+}
+.bsign-field input {
+  font: inherit;
+  font-size: var(--type-body-size);
+  min-height: var(--touch);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg);
+  color: var(--ink);
+}
+.bsign-submit {
+  width: 100%;
+}
+.bsign-alt {
+  border: 0;
+  background: none;
+  padding: 4px 0;
+  font: inherit;
+  font-size: var(--type-small-size);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
 .bcard-thumb {
   display: block;
   width: 100%;
