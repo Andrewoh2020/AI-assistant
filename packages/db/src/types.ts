@@ -142,6 +142,10 @@ export interface BrowserSessionRow {
   tabs: BrowserTab[];
   /** The site refused the browser (a bot wall, or access denied). */
   blocked: boolean;
+  /** What the browser is waiting for: the person's sign-in, or a one-time code. */
+  ask_kind: "sign_in" | "code" | null;
+  /** The site the sign-in or code will be typed into (from the page the browser is on). */
+  ask_site: string | null;
 }
 
 export interface BrowserTab {

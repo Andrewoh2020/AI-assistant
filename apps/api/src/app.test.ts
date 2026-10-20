@@ -816,6 +816,74 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(run.message.text).toBe("You have 3 unread messages.");
   });
 
+  it("takes a sign-in in the secure box: typed only on that site, never seen or kept", async () => {
+    const cookie = await signUp();
+    const other = await signUp();
+    const chat = await mainChatId(cookie);
+    browser.scripts.push(
+      { result: "NEEDS_SIGN_IN: Please sign in to Example." },
+      { result: "NEEDS_CODE: Example sent a code to your phone." },
+      { result: "Signed in. You have 3 unread messages." },
+    );
+    travila.scripts.push([
+      {
+        tools: [
+          { name: "browse", args: { title: "Count unread", task: "Count my unread messages." } },
+        ],
+      },
+      { answer: "You have 3 unread messages." },
+    ]);
+    const runId = (await ask(cookie, chat, "How many unread messages?")).json().run.id;
+    const asking = await pollUntil(cookie, runId, (r) => r.browsers[0]?.status === "needs_user");
+    const id = asking.browsers[0].id;
+    // The site comes from the page the browser is on.
+    expect(asking.browsers[0]).toMatchObject({
+      label: "Sign-in needed",
+      ask: { kind: "sign_in", site: "example.com" },
+      needsUser: "Please sign in to Example.",
+    });
+    const send = (who: string, payload: Record<string, string>) =>
+      app.inject({
+        method: "POST",
+        url: `/browser-sessions/${id}/sign-in`,
+        headers: { cookie: who },
+        payload,
+      });
+    expect((await send(other, { username: "me", password: "hunter2-secret" })).statusCode).toBe(
+      403,
+    );
+    expect((await send(cookie, { username: "me" })).statusCode).toBe(400);
+
+    const sent = await send(cookie, { username: " me@example.com ", password: "hunter2-secret" });
+    expect(sent.statusCode).toBe(200);
+    expect(sent.body).not.toContain("hunter2");
+    expect(sent.json().browser).toMatchObject({ status: "running", ask: null });
+    const followUp = [...browser.runs.values()][1]!;
+    expect(followUp.input.sessionId).toBe([...browser.runs.values()][0]!.sessionId);
+    expect(followUp.input.secrets).toEqual([
+      { alias: "login_username", value: "me@example.com", allowedDomains: ["example.com"] },
+      { alias: "login_password", value: "hunter2-secret", allowedDomains: ["example.com"] },
+    ]);
+    // The agent's instructions name the secrets, never their values.
+    expect(followUp.input.task).toContain("login_password");
+    expect(followUp.input.task).not.toContain("hunter2");
+    // Again for the one-time code.
+    const coding = await pollUntil(cookie, runId, (r) => r.browsers[0]?.ask?.kind === "code");
+    expect(coding.browsers[0].needsUser).toBe("Example sent a code to your phone.");
+    expect((await send(cookie, { code: "123 456" })).statusCode).toBe(200);
+    expect([...browser.runs.values()][2]!.input.secrets).toEqual([
+      { alias: "login_code", value: "123456", allowedDomains: ["example.com"] },
+    ]);
+    const run = await pollUntilDone(cookie, runId);
+    expect(run.message.text).toBe("You have 3 unread messages.");
+    // Nothing we keep holds the password.
+    const [kept] = await sql!`SELECT count(*)::int AS n FROM browser_sessions b
+      WHERE b.run_id = ${runId} AND row_to_json(b)::text LIKE '%hunter2%'`;
+    expect(kept!.n).toBe(0);
+    // Once it's no longer asking, the box refuses.
+    expect((await send(cookie, { password: "x" })).statusCode).toBe(409);
+  });
+
   it("says when a site blocks the browser, and the assistant answers without it", async () => {
     const cookie = await signUp();
     const chat = await mainChatId(cookie);

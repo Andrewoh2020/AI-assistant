@@ -8,7 +8,7 @@ import {
   verifySession,
   type SessionPayload,
 } from "./auth.js";
-import { handBack, takeOver, viewOf } from "./browser.js";
+import { handBack, signIn, takeOver, viewOf } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
@@ -421,6 +421,36 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const row = await handBack(browserDeps(), s.userId, req.params.id);
     return { browser: viewOf(row, config.sessionSecret) };
   });
+
+  // The secure sign-in box. The body holds a password: it is passed straight on to Browser Use
+  // and never logged, stored or echoed back.
+  app.post<{
+    Params: { id: string };
+    Body: { username?: string; password?: string; code?: string };
+  }>(
+    "/browser-sessions/:id/sign-in",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            username: { type: "string", maxLength: 1000 },
+            password: { type: "string", maxLength: 1000 },
+            code: { type: "string", maxLength: 64 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("browser session");
+      const row = await signIn(browserDeps(), s.userId, req.params.id, req.body ?? {});
+      reply.header("Cache-Control", "no-store");
+      return { browser: viewOf(row, config.sessionSecret) };
+    },
+  );
 
   return app;
 }
