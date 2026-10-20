@@ -3,6 +3,7 @@
 import { ApiError, type VaultEvent, type VaultLogin } from "@ai-assistant/api-client";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "@/lib/client";
+import { VaultImport } from "./VaultImport";
 
 /**
  * Settings, Muse style: a sheet over the chat with grouped white lists, a centered title and a
@@ -10,7 +11,11 @@ import { api } from "@/lib/client";
  * Secure credentials store (the vault); the other rows arrive with their features.
  */
 
-type Page = { name: "home" } | { name: "vault" } | { name: "login"; id: string };
+type Page =
+  | { name: "home" }
+  | { name: "vault" }
+  | { name: "login"; id: string }
+  | { name: "import"; key: number };
 
 export function Settings({
   start = "home",
@@ -59,13 +64,15 @@ export function Settings({
 
   const login = page.name === "login" ? logins?.find((l) => l.id === page.id) : undefined;
   const back: Page | null =
-    page.name === "vault" ? { name: "home" } : page.name === "login" ? { name: "vault" } : null;
+    page.name === "vault" ? { name: "home" } : page.name === "home" ? null : { name: "vault" };
   const title =
     page.name === "home"
       ? "Settings"
       : page.name === "vault"
         ? "Secure credentials store"
-        : (login?.site ?? "Saved login");
+        : page.name === "import"
+          ? "Import logins"
+          : (login?.site ?? "Saved login");
 
   return (
     <div className="sheet-scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -128,8 +135,10 @@ export function Settings({
               logins={logins}
               activity={activity}
               onPick={(id) => setPage({ name: "login", id })}
+              onImport={() => setPage({ name: "import", key: Date.now() })}
             />
           )}
+          {page.name === "import" && <VaultImport key={page.key} onImported={load} />}
           {page.name === "login" &&
             (login ? (
               <LoginPage
@@ -156,10 +165,12 @@ function VaultPage({
   logins,
   activity,
   onPick,
+  onImport,
 }: {
   logins: VaultLogin[] | null;
   activity: VaultEvent[];
   onPick: (id: string) => void;
+  onImport: () => void;
 }) {
   return (
     <>
@@ -189,6 +200,14 @@ function VaultPage({
             />
           ))
         )}
+      </div>
+      <div className="group">
+        <Row
+          icon={<ImportIcon />}
+          label="Import from a password manager"
+          sub="Apple Passwords, Chrome, 1Password, Bitwarden and more"
+          onClick={onImport}
+        />
       </div>
       {activity.length > 0 && (
         <>
@@ -441,6 +460,7 @@ export const VaultIcon = () =>
   svg(
     "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3ZM9.5 11.5h5v4h-5v-4ZM10.5 11.5V10a1.5 1.5 0 0 1 3 0v1.5",
   );
+const ImportIcon = () => svg("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14");
 const ChevronRight = () => <span className="row-chevron">{svg("M9 6l6 6-6 6")}</span>;
 const ChevronLeft = () => svg("M15 6l-6 6 6 6");
 const CloseIcon = () => svg("M6 6l12 12M18 6 6 18");

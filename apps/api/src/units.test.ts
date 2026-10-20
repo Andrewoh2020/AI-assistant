@@ -3,6 +3,7 @@ import { groundAnswer } from "./citations.js";
 import { checkUrl, decide, isPrivateAddress, looksPrivate } from "./policy.js";
 import { cleanTitle, unescapeMarkdown } from "./search.js";
 import { detectInjection, fence } from "./untrusted.js";
+import { parseCsv, readExport, siteOf } from "./vault-import.js";
 import {
   hashPassword,
   openSecret,
@@ -202,5 +203,53 @@ describe("browser sign-in requests", () => {
     ).toBe(
       "GitHub redirected to the sign-in page at github.com; please sign in, then hand it back.",
     );
+  });
+});
+
+describe("password export files", () => {
+  it("reads quoted CSV with commas, quotes and newlines", () => {
+    expect(parseCsv('\uFEFFa,b\r\n"x, y","say ""hi""\nthere"\n')).toEqual([
+      ["a", "b"],
+      ["x, y", 'say "hi"\nthere'],
+    ]);
+  });
+
+  it("binds each login to its site", () => {
+    expect(siteOf("https://www.GitHub.com/login")).toEqual({ site: "github.com", path: "/login" });
+    expect(siteOf("accounts.google.com")).toEqual({ site: "accounts.google.com", path: null });
+    expect(siteOf("android://abc@com.example.app/")).toBeNull();
+    expect(siteOf("http://sn")).toBeNull();
+  });
+
+  it("reads Chrome, Firefox, Apple, 1Password, Bitwarden and LastPass files", () => {
+    const files = {
+      chrome: "name,url,username,password,note\ngithub.com,https://github.com/login,me,pw1,",
+      firefox:
+        '"url","username","password","httpRealm","formActionOrigin","guid"\n"https://github.com","me","pw1",,"https://github.com","{1}"',
+      apple: "Title,URL,Username,Password,Notes,OTPAuth\nGitHub,https://github.com/,me,pw1,,",
+      onepassword: "Title,Url,Username,Password,OTPAuth,Favorite\nGitHub,github.com,me,pw1,,false",
+      bitwarden:
+        "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,login,GitHub,,,0,https://github.com,me,pw1,\n,,note,Wifi,secret,,0,,,,",
+      lastpass:
+        "url,username,password,totp,extra,name,grouping,fav\nhttps://github.com,me,pw1,,,GitHub,,0\nhttp://sn,,,,note,Wifi,,0",
+    };
+    for (const [name, csv] of Object.entries(files)) {
+      const { logins } = readExport(csv);
+      expect(logins, name).toEqual([
+        expect.objectContaining({ site: "github.com", username: "me", password: "pw1" }),
+      ]);
+    }
+    expect(readExport(files.bitwarden).skipped).toEqual([
+      { index: 1, name: "Wifi", reason: "not_a_login" },
+    ]);
+  });
+
+  it("keeps the later of two rows for the same login, and refuses other files", () => {
+    const { logins, skipped } = readExport(
+      "url,username,password\nhttps://a.com,me,old\nhttps://a.com,me,new\nhttps://b.com,me,",
+    );
+    expect(logins.map((l) => l.password)).toEqual(["new"]);
+    expect(skipped).toMatchObject([{ reason: "no_password" }]);
+    expect(() => readExport("name,phone\nAnn,123")).toThrow(/doesn't look like a password export/);
   });
 });

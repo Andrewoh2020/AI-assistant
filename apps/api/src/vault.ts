@@ -115,8 +115,8 @@ async function audit(
   tx: TransactionSql,
   userId: string,
   action: AuditEventRow["action"],
-  site: string,
-  account: string,
+  site: string | null,
+  account: string | null,
   browserSessionId: string | null,
   detail: string | null = null,
 ) {
@@ -312,4 +312,72 @@ export async function vaultActivity(sql: Sql, userId: string, limit = 50): Promi
     detail: r.detail,
     at: r.created_at.toISOString(),
   }));
+}
+
+/**
+ * Saves logins from a password manager's export file. `logins` are the rows the person ticked;
+ * a login already saved for the same site and account is replaced only if it was ticked too.
+ */
+export async function importLogins(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  manager: string,
+  logins: { site: string; username: string; password: string; loginPath: string | null }[],
+): Promise<{ imported: number; replaced: number }> {
+  return withVault(sql, userId, async (tx) => {
+    const [batch] = await tx<{ id: string }[]>`
+      INSERT INTO vault.import_batches (user_id, manager) VALUES (${userId}, ${manager})
+      RETURNING id`;
+    let imported = 0;
+    let replaced = 0;
+    for (const l of logins) {
+      const [existing] = await tx<{ id: string }[]>`
+        SELECT id FROM vault.credentials WHERE site = ${l.site} AND account = ${l.username}`;
+      const id = existing?.id ?? randomUUID();
+      const sealed = seal(vk, context(userId, id, l.site), {
+        username: l.username,
+        password: l.password,
+      });
+      if (existing) {
+        await tx`
+          UPDATE vault.credentials SET login_path = ${l.loginPath}, sealed = ${sealed.sealed},
+            wrapped_key = ${sealed.wrapped_key}, key_id = ${sealed.key_id}, source = 'imported',
+            import_batch_id = ${batch!.id}, last_result = NULL, last_result_at = NULL,
+            updated_at = now()
+          WHERE id = ${id}`;
+        replaced++;
+      } else {
+        await tx`
+          INSERT INTO vault.credentials (id, user_id, site, account, login_path, sealed,
+                                         wrapped_key, key_id, source, import_batch_id)
+          VALUES (${id}, ${userId}, ${l.site}, ${l.username}, ${l.loginPath}, ${sealed.sealed},
+                  ${sealed.wrapped_key}, ${sealed.key_id}, 'imported', ${batch!.id})`;
+        imported++;
+      }
+    }
+    await tx`UPDATE vault.import_batches SET imported = ${imported + replaced},
+               skipped = 0 WHERE id = ${batch!.id}`;
+    const n = imported + replaced;
+    await audit(
+      tx,
+      userId,
+      "imported",
+      null,
+      null,
+      null,
+      `Imported ${n} login${n === 1 ? "" : "s"} from ${manager}`,
+    );
+    return { imported, replaced };
+  });
+}
+
+/** Which of these site and account pairs already have a saved login. */
+export async function existingLogins(sql: Sql, userId: string): Promise<Set<string>> {
+  const rows = await withVault(
+    sql,
+    userId,
+    (tx) => tx<{ site: string; account: string }[]>`SELECT site, account FROM vault.credentials`,
+  );
+  return new Set(rows.map((r) => `${r.site}\n${r.account}`));
 }
