@@ -36,7 +36,7 @@ export async function saveFile(
   sql: Sql,
   userId: string,
   input: {
-    kind: "upload" | "browser_download";
+    kind: "upload" | "browser_download" | "generated";
     name: string;
     mime: string;
     data: Uint8Array;

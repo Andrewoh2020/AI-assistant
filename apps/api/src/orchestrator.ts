@@ -19,7 +19,7 @@ import {
 import type { MessageView, RunView } from "@ai-assistant/api-client";
 import {
   advanceBrowse,
-  browserViewFor,
+  browserViewsFor,
   findBrowserSession,
   stopBrowsing,
   type BrowserDeps,
@@ -27,6 +27,7 @@ import {
 import { groundAnswer } from "./citations.js";
 import { Conflict, NotFound } from "./errors.js";
 import { attachmentNote, fileTexts, fileView } from "./files.js";
+import { HttpError } from "./http.js";
 import {
   claimToolCall,
   doneLineFor,
@@ -99,6 +100,7 @@ export async function messageViews(
   sql: Sql,
   s: Session,
   messages: MessageRow[],
+  secret: string,
 ): Promise<MessageView[]> {
   const runIds = [...new Set(messages.map((m) => m.run_id).filter((x): x is string => !!x))];
   const sources = runIds.length
@@ -137,6 +139,7 @@ export async function messageViews(
           : [],
       ] as const,
   );
+  const browsers = await browserViewsFor(sql, s.userId, runIds, secret);
   return messages.map((m) => {
     const textPart = m.parts.find(
       (p): p is Extract<MessagePart, { type: "text" }> => p.type === "text",
@@ -169,6 +172,7 @@ export async function messageViews(
         ? attached.filter((f) => f.message_id === m.id)
         : downloaded.filter((f) => f.run_id === m.run_id)
       ).map(fileView),
+      browsers: m.role === "assistant" && m.run_id ? (browsers.get(m.run_id) ?? []) : [],
       createdAt: new Date(m.created_at).toISOString(),
       runId: m.run_id,
       clientMessageId: m.client_message_id,
@@ -186,7 +190,7 @@ async function runView(deps: Deps, s: Session, run: RunRow): Promise<RunView> {
       (tx) => tx<MessageRow[]>`
       SELECT * FROM messages WHERE run_id = ${run.id} AND role = 'assistant' ORDER BY created_at DESC LIMIT 1`,
     );
-    message = rows[0] ? ((await messageViews(sql, s, rows))[0] ?? null) : null;
+    message = rows[0] ? ((await messageViews(sql, s, rows, deps.secret))[0] ?? null) : null;
   }
   return {
     id: run.id,
@@ -195,9 +199,7 @@ async function runView(deps: Deps, s: Session, run: RunRow): Promise<RunView> {
     statusLine: run.status_line,
     error: run.error,
     message,
-    browser: TERMINAL.has(run.status)
-      ? null
-      : await browserViewFor(browserDeps(deps), { userId: s.userId, runId: run.id }),
+    browsers: (await browserViewsFor(sql, s.userId, [run.id], deps.secret)).get(run.id) ?? [],
   };
 }
 
@@ -332,7 +334,7 @@ export async function getChat(deps: Deps, s: Session, chatId: string) {
   );
   return {
     chat,
-    messages: await messageViews(sql, s, messages),
+    messages: await messageViews(sql, s, messages, deps.secret),
     activeRun: runs[0] ? await runView(deps, s, runs[0]) : null,
     // Questions that got no answer (failed or stopped), so the chat can say so after a reload.
     endedRuns: await Promise.all(unanswered.map((r) => runView(deps, s, r))),
@@ -413,7 +415,10 @@ export async function sendMessage(
       s.userId,
       (tx) => tx<RunRow[]>`SELECT * FROM runs WHERE id = ${dupe.run_id}`,
     );
-    return { message: (await messageViews(sql, s, [dupe]))[0]!, run: await runView(deps, s, run!) };
+    return {
+      message: (await messageViews(sql, s, [dupe], deps.secret))[0]!,
+      run: await runView(deps, s, run!),
+    };
   }
 
   const { run, message } = created;
@@ -474,7 +479,7 @@ export async function sendMessage(
     (tx) => tx<RunRow[]>`SELECT * FROM runs WHERE id = ${run.id}`,
   );
   return {
-    message: (await messageViews(sql, s, [message]))[0]!,
+    message: (await messageViews(sql, s, [message], deps.secret))[0]!,
     run: await runView(deps, s, fresh!),
   };
 }
@@ -648,9 +653,15 @@ async function checkBrowse(
       reason: typeof result.error === "string" ? result.error.slice(0, 500) : undefined,
     },
   );
-  await deps.travila.submitClientToolResults(s.travilaUserId, threadId, latest.travila_run_id!, [
-    { toolCallId: call.id, toolName: call.name, resultJson: result },
-  ]);
+  try {
+    await deps.travila.submitClientToolResults(s.travilaUserId, threadId, latest.travila_run_id!, [
+      { toolCallId: call.id, toolName: call.name, resultJson: result },
+    ]);
+  } catch (err) {
+    // 410: an overlapping poll already sent this result. Nothing is lost.
+    if (err instanceof HttpError && err.status === 410) return;
+    throw err;
+  }
   await updateRun(sql, s, run.id, { status: "running", status_line: doneLineFor([call]) });
 }
 

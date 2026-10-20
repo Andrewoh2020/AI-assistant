@@ -133,4 +133,19 @@ export interface BrowserSessionRow {
   checked_at: Date | null;
   waiting_since: Date | null;
   finished_at: Date | null;
+  /** A 2-5 word name for the job, from the assistant. */
+  title: string | null;
+  /** The last picture of the page (a file of kind 'generated'). */
+  screenshot_file_id: string | null;
+  screenshot_at: Date | null;
+  /** The browser's tabs when that picture was taken. */
+  tabs: BrowserTab[];
+  /** The site refused the browser (a bot wall, or access denied). */
+  blocked: boolean;
+}
+
+export interface BrowserTab {
+  url: string;
+  title: string | null;
+  active: boolean;
 }

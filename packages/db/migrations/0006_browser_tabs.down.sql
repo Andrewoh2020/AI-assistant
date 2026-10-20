@@ -1,0 +1,1 @@
+ALTER TABLE browser_sessions DROP COLUMN IF EXISTS blocked, DROP COLUMN IF EXISTS screenshot_at, DROP COLUMN IF EXISTS tabs;

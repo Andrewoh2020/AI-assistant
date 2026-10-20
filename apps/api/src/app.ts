@@ -378,6 +378,25 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       .send(stored.data);
   });
 
+  // Pictures shown in the page (the browser's last page). Only safe image types are shown
+  // inline; anything else must be downloaded.
+  app.get<{ Params: { id: string } }>("/files/:id/view", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("file");
+    const stored = await readFile(sql, s.userId, req.params.id);
+    if (!stored || !INLINE_IMAGES.has(stored.file.mime ?? "")) throw new NotFound("file");
+    return (
+      reply
+        .header("Content-Type", stored.file.mime!)
+        .header("Content-Disposition", "inline")
+        .header("X-Content-Type-Options", "nosniff")
+        // A file never changes, so the browser may keep it (it's private to this person).
+        .header("Cache-Control", "private, max-age=86400, immutable")
+        .send(stored.data)
+    );
+  });
+
   // Browser ---------------------------------------------------------------------------
 
   const browserDeps = () => ({
@@ -405,6 +424,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   return app;
 }
+
+const INLINE_IMAGES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 /** The uploaded file's type: X-File-Type when it looks like a media type, else Content-Type. */
 function uploadType(headers: Record<string, string | string[] | undefined>): string {

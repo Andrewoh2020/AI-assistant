@@ -553,7 +553,8 @@ dialog.confirm p {
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 32px 24px 16px;
+  /* Room at the top for "Assistant is working". */
+  padding: 72px 24px 16px;
 }
 .messages > * {
   max-width: var(--chat-column);
@@ -960,84 +961,297 @@ dialog.confirm p {
   height: 20px;
 }
 
-/* The live browser card: watch-only until you take over. */
-.browser-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
+/* The browser, Muse style: a small card in the chat and a preview panel on the right. */
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-accent:hover {
+  filter: brightness(1.08);
+}
+.bcard {
+  background: var(--bubble);
   border-radius: var(--radius-l);
-  box-shadow: var(--shadow-1);
-  padding: 12px;
-  margin: 0 0 16px;
-  max-width: 100%;
+  padding: 14px;
+  margin: 0 0 8px;
+  width: min(380px, 92%);
 }
-.browser-banner {
+.bcard-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  background: var(--accent-soft);
-  border-radius: var(--radius-m);
-  padding: 8px 8px 8px 14px;
-  margin-bottom: 10px;
-  font-weight: 600;
 }
-.browser-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-  min-height: 40px;
-}
-.browser-head .nav-icon {
-  width: 20px;
-  height: 20px;
+.bcard-icon {
   flex: none;
-  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
 }
-.browser-step {
-  flex: 1;
+.bcard-icon.is-failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.bcard-text {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  line-height: 1.3;
+}
+.bcard-text span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.bcard-ask {
+  margin-top: 12px;
+  background: var(--surface);
+  border-radius: var(--radius-m);
+  padding: 10px 12px;
+}
+.bcard-ask p {
+  margin: 0 0 8px;
+  font-size: var(--type-small-size);
+}
+.bcard-thumb {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 0;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  overflow: hidden;
+  cursor: pointer;
+}
+.bcard-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+.bcard-thumb-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
   color: var(--ink-2);
   font-size: var(--type-small-size);
 }
-.browser-frame {
-  position: relative;
-  aspect-ratio: 16 / 10;
-  border-radius: var(--radius-m);
-  overflow: hidden;
+.bcard-open {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  min-height: var(--touch);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bcard-open:hover {
   background: var(--surface-2);
+}
+.bcard-open[aria-pressed="true"] {
+  color: var(--ink-2);
+}
+
+/* "Assistant is working", at the top of the chat like Muse's name and status. */
+.chat {
+  position: relative;
+}
+.working-pill {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 16px;
+  border-radius: var(--radius-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  line-height: 1.25;
+  pointer-events: none;
+}
+.working-pill span {
+  font-size: var(--type-caption-size);
+  color: var(--ink-2);
+}
+
+/* The preview panel: beside the chat on a computer (the chat list makes room), full screen on
+   a phone. */
+.shell.has-preview,
+.shell.has-preview.sidebar-hidden,
+.shell.has-preview.panel-floating {
+  grid-template-columns: var(--rail-width) minmax(320px, 1fr) minmax(0, 1.25fr);
+}
+.shell.has-preview .sidebar {
+  display: none;
+}
+.bpanel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
+.bpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.bpanel-title {
+  flex: 1;
+  min-width: 0;
+}
+.bpanel-title h2 {
+  margin: 0;
+  font-size: var(--type-body-size);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bpanel-title p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+}
+.bpanel-error {
+  margin: 8px 20px 0;
+}
+.bpanel-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.bpanel-tab {
+  flex: none;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 14px;
+  font-size: var(--type-small-size);
+  color: var(--ink-2);
+  border-radius: 10px 10px 0 0;
+}
+.bpanel-tab.is-active {
+  background: var(--surface);
+  color: var(--ink);
   border: 1px solid var(--line);
+  border-bottom-color: var(--surface);
+  margin-bottom: -1px;
 }
-.browser-frame.is-live {
+.bpanel-view {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--surface-2);
+}
+.bpanel-view.is-live {
   outline: 3px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: -3px;
 }
-.browser-frame iframe {
+.bpanel-view iframe,
+.bpanel-view img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
 }
-.browser-frame:not(.is-live) iframe {
+.bpanel-view img {
+  object-fit: contain;
+  object-position: top;
+}
+.bpanel-view:not(.is-live) iframe {
   pointer-events: none;
 }
-.browser-placeholder {
+.bpanel-empty {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-}
-.browser-note {
-  margin: 8px 2px 0;
-  font-size: var(--type-caption-size);
   color: var(--ink-2);
 }
+.bpanel-closed {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: var(--type-small-size);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bpanel-foot {
+  margin: 0;
+  padding: 8px 20px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: var(--type-caption-size);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 1024px) {
+  .shell.has-preview,
+  .shell.has-preview.sidebar-hidden,
+  .shell.has-preview.panel-floating {
+    grid-template-columns: var(--rail-width) minmax(300px, 1fr) minmax(0, 1fr);
+  }
+}
 @media (max-width: 719px) {
-  .browser-frame {
-    aspect-ratio: 3 / 4;
+  .shell.has-preview,
+  .shell.has-preview.sidebar-hidden,
+  .shell.has-preview.panel-floating {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bpanel {
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    border-left: 0;
+  }
+  .bpanel-head {
+    padding-left: 16px;
+  }
+  .bpanel-head .btn {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .bcard {
+    width: 92%;
+  }
+  /* On a phone the title bar is there, so the status sits just under it. */
+  .working-pill {
+    position: static;
+    transform: none;
+    flex-direction: row;
+    gap: 6px;
+    align-self: center;
+    margin-top: 4px;
+    padding: 2px 12px;
+    box-shadow: none;
+    background: transparent;
   }
 }

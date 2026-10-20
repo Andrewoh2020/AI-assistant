@@ -67,6 +67,7 @@ async function pollUntil(cookie: string, runId: string, until: (run: any) => boo
     const res = await app.inject({ method: "GET", url: `/runs/${runId}`, headers: { cookie } });
     await Promise.all(pending.splice(0));
     const run = res.json().run;
+    if (!run) throw new Error(res.body);
     if (until(run)) return run;
   }
   throw new Error("the run never got there");
@@ -510,15 +511,49 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const sent = await ask(cookie, chat, "What's the first quote on that page?");
     const runId = sent.json().run.id;
 
-    const seen = await pollUntil(cookie, runId, (r) => r.browser?.liveUrl);
+    const seen = await pollUntil(cookie, runId, (r) => r.browsers[0]?.liveUrl);
     expect(seen.status).toBe("awaiting_tools");
     expect(seen.statusLine).toBe("Using the browser");
-    expect(seen.browser.liveUrl).toMatch(/^https:\/\/live\.example\//);
+    expect(seen.browsers[0].liveUrl).toMatch(/^https:\/\/live\.example\//);
 
     const run = await pollUntilDone(cookie, runId);
     expect(run.status).toBe("completed");
-    expect(run.browser).toBeNull();
     expect(run.message.text).toBe("It's a quote by Albert Einstein [1].");
+    // The card stays on the answer: a short name, Muse's status word, the site and a picture.
+    const [card] = run.message.browsers;
+    expect(card).toMatchObject({
+      status: "done",
+      label: "Done",
+      title: "Read the first quote and",
+      site: "example.com",
+      closed: true,
+      failed: false,
+      liveUrl: null,
+    });
+    expect(card.tabs).toEqual([
+      { url: "https://www.example.com/page", title: "Example page", active: true },
+    ]);
+    const picture = await app.inject({
+      method: "GET",
+      url: `/files/${card.screenshotId}/view`,
+      headers: { cookie },
+    });
+    expect(picture.statusCode).toBe(200);
+    expect(picture.headers["content-type"]).toBe("image/jpeg");
+    expect(picture.headers["content-disposition"]).toBe("inline");
+    // The picture was taken before the browser was closed, and isn't listed as a download.
+    expect(browser.captures.length).toBeGreaterThan(0);
+    expect(run.message.files).toEqual([]);
+    const other = await signUp();
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/files/${card.screenshotId}/view`,
+          headers: { cookie: other },
+        })
+      ).statusCode,
+    ).toBe(403);
     expect(run.message.sources.map((x: { url: string }) => x.url)).toEqual([url]);
 
     // The agent got its rules, the task and the page; one profile was made for this user.
@@ -537,9 +572,13 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(browser.stopped).toHaveLength(1);
 
     // The live link is stored sealed, never in plain text.
-    const [row] = await sql!`SELECT live_view_url_ciphertext FROM browser_sessions
+    const [row] =
+      await sql!`SELECT live_view_url_ciphertext, jsonb_typeof(outputs_before) AS before,
+                                    jsonb_typeof(tabs) AS tabs FROM browser_sessions
                              WHERE run_id = ${runId}`;
     expect(row!.live_view_url_ciphertext).not.toContain("live.example");
+    // Stored as JSON objects, so files already in outputs/ aren't copied again next time.
+    expect(row).toMatchObject({ before: "object", tabs: "array" });
   });
 
   it("uploads text and JSON files as they are", async () => {
@@ -701,8 +740,8 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       { answer: "Your order has shipped." },
     ]);
     const runId = (await ask(a, chat, "Check my order")).json().run.id;
-    const seen = await pollUntil(a, runId, (r) => r.browser?.liveUrl);
-    const sessionId = seen.browser.id;
+    const seen = await pollUntil(a, runId, (r) => r.browsers[0]?.liveUrl);
+    const sessionId = seen.browsers[0].id;
 
     // User B can't see the run (and so the live link) or control the browser.
     for (const req of [
@@ -725,7 +764,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(first!.cancelled).toBe(true);
     expect(second).toBeUndefined();
     // While the person has it, the run waits; nothing goes back to the model.
-    const waiting = await pollUntil(a, runId, (r) => r.browser?.status === "user_control");
+    const waiting = await pollUntil(a, runId, (r) => r.browsers[0]?.status === "user_control");
     expect(waiting.status).toBe("awaiting_tools");
     expect(travila.submitted).toHaveLength(0);
 
@@ -757,24 +796,62 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       { answer: "You have 3 unread messages." },
     ]);
     const runId = (await ask(cookie, chat, "How many unread messages do I have?")).json().run.id;
-    const asking = await pollUntil(cookie, runId, (r) => r.browser?.status === "needs_user");
-    expect(asking.browser.needsUser).toBe(
+    const asking = await pollUntil(cookie, runId, (r) => r.browsers[0]?.status === "needs_user");
+    expect(asking.browsers[0].needsUser).toBe(
       "Please sign in to example.com, then hand the browser back.",
     );
-    expect(asking.browser.liveUrl).toBeTruthy();
+    expect(asking.browsers[0].liveUrl).toBeTruthy();
 
     await app.inject({
       method: "POST",
-      url: `/browser-sessions/${asking.browser.id}/take-over`,
+      url: `/browser-sessions/${asking.browsers[0].id}/take-over`,
       headers: { cookie },
     });
     await app.inject({
       method: "POST",
-      url: `/browser-sessions/${asking.browser.id}/hand-back`,
+      url: `/browser-sessions/${asking.browsers[0].id}/hand-back`,
       headers: { cookie },
     });
     const run = await pollUntilDone(cookie, runId);
     expect(run.message.text).toBe("You have 3 unread messages.");
+  });
+
+  it("says when a site blocks the browser, and the assistant answers without it", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    browser.scripts.push({ result: "BLOCKED: The site showed an Access Denied page." });
+    travila.scripts.push([
+      {
+        tools: [
+          {
+            name: "browse",
+            args: {
+              title: "Check ticket prices",
+              task: "Find ticket prices.",
+              url: "https://tickets.example/",
+            },
+          },
+        ],
+      },
+      { answer: "The ticket site blocked the browser, so I couldn't check prices." },
+    ]);
+    const runId = (await ask(cookie, chat, "Ticket prices?")).json().run.id;
+    const run = await pollUntilDone(cookie, runId);
+    expect(run.message.browsers[0]).toMatchObject({
+      title: "Check ticket prices",
+      status: "failed",
+      label: "Site blocked",
+      failed: true,
+    });
+    const result = travila.submitted[0]!.results[0]!.resultJson as { error: string };
+    expect(result.error).toContain(
+      "The website blocked the browser: The site showed an Access Denied page.",
+    );
+    // A reload shows the same card.
+    const reloaded = (
+      await app.inject({ method: "GET", url: `/chats/${chat}`, headers: { cookie } })
+    ).json();
+    expect(reloaded.messages.at(-1).browsers[0].label).toBe("Site blocked");
   });
 
   it("Stop closes the browser too", async () => {
@@ -783,14 +860,14 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     browser.scripts.push({ polls: 1000 });
     travila.scripts.push([{ tools: [{ name: "browse", args: { task: "Something slow." } }] }]);
     const runId = (await ask(cookie, chat, "Do something slow")).json().run.id;
-    await pollUntil(cookie, runId, (r) => r.browser?.liveUrl);
+    await pollUntil(cookie, runId, (r) => r.browsers[0]?.liveUrl);
     const stopped = await app.inject({
       method: "POST",
       url: `/runs/${runId}/stop`,
       headers: { cookie },
     });
     expect(stopped.json().run.status).toBe("cancelled");
-    expect(stopped.json().run.browser).toBeNull();
+    expect(stopped.json().run.browsers[0]).toMatchObject({ label: "Stopped", failed: true });
     expect([...browser.runs.values()][0]!.cancelled).toBe(true);
     expect(browser.stopped).toHaveLength(1);
   });

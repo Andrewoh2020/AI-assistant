@@ -3,6 +3,7 @@
 import {
   ApiError,
   TERMINAL_STATUSES,
+  type BrowserView,
   type ChatSummary,
   type FileView,
   type Me,
@@ -23,7 +24,7 @@ import {
 import { api } from "@/lib/client";
 import { usePref } from "@/lib/prefs";
 import { Answer } from "./Answer";
-import { BrowserCard } from "./BrowserCard";
+import { BrowserCard, BrowserPanel } from "./BrowserCard";
 import { FileChip, FileList, PaperclipIcon } from "./Files";
 import { Menu, MenuItem } from "./Menu";
 
@@ -70,6 +71,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const panelToggleRef = useRef<HTMLAnchorElement>(null);
+  // The browser shown in the right-hand preview panel.
+  const [preview, setPreview] = useState<{ id: string; takeControl: boolean } | null>(null);
 
   // A chat panel opened over the chat closes when you click anywhere else, or press Escape.
   useEffect(() => {
@@ -121,6 +124,7 @@ export function AppShell({ chatId }: { chatId: string }) {
     setSelected(null);
     setAttachments([]);
     setPending(null);
+    setPreview(null);
     setDraft(drafts.get(chatId) ?? "");
     setUnread((prev) => {
       if (!prev.has(chatId)) return prev;
@@ -140,6 +144,7 @@ export function AppShell({ chatId }: { chatId: string }) {
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
+    setPreview(null);
     Promise.all([api.me(), api.listChats(), api.getChat(chatId)])
       .then(([meRes, list, data]) => {
         if (cancelled) return;
@@ -452,6 +457,32 @@ export function AppShell({ chatId }: { chatId: string }) {
       ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
+  // Every browser in this chat, newest data first (the active run's is live).
+  const allBrowsers: BrowserView[] = [
+    ...(activeRun?.browsers ?? []),
+    ...endedRuns.flatMap((r) => r.browsers),
+    ...messages.flatMap((m) => m.browsers),
+  ];
+  const previewBrowser = preview ? allBrowsers.find((b) => b.id === preview.id) : undefined;
+
+  function updateBrowser(view: BrowserView) {
+    setActiveRun((run) =>
+      run ? { ...run, browsers: run.browsers.map((b) => (b.id === view.id ? view : b)) } : run,
+    );
+  }
+
+  function browserCards(list: BrowserView[]) {
+    return list.map((b) => (
+      <BrowserCard
+        key={b.id}
+        browser={b}
+        open={preview?.id === b.id}
+        onOpen={() => setPreview({ id: b.id, takeControl: false })}
+        onTakeControl={() => setPreview({ id: b.id, takeControl: true })}
+      />
+    ));
+  }
+
   const mainChat = chats.find((c) => c.kind === "main");
   const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
   const archivedChats = chats.filter((c) => c.archived);
@@ -467,7 +498,7 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   return (
     <div
-      className={`shell ${navOpen ? "nav-open" : ""} ${keepPanel ? "" : "panel-floating"} ${panelShown ? "" : "sidebar-hidden"}`}
+      className={`shell ${navOpen ? "nav-open" : ""} ${keepPanel ? "" : "panel-floating"} ${panelShown ? "" : "sidebar-hidden"} ${previewBrowser ? "has-preview" : ""}`}
     >
       <a className="skip-link" href="#composer-input">
         Skip to the message box
@@ -636,6 +667,12 @@ export function AppShell({ chatId }: { chatId: string }) {
           <h1>{chat ? (chat.kind === "main" ? "Main chat" : chat.title || "Side chat") : ""}</h1>
         </header>
 
+        {working && (
+          <div className="working-pill" role="status">
+            <strong>Assistant</strong>
+            <span>is working</span>
+          </div>
+        )}
         <div className="messages" aria-live="polite">
           {loadError && (
             <p className="notice notice-danger" role="alert">
@@ -656,6 +693,7 @@ export function AppShell({ chatId }: { chatId: string }) {
             const ended = m.role === "user" && m.runId ? runByUserMessage.get(m.runId) : undefined;
             return (
               <div key={m.id}>
+                {m.role === "assistant" && browserCards(m.browsers)}
                 <article
                   className={`turn turn-${m.role}`}
                   aria-label={m.role === "user" ? "You" : "Assistant"}
@@ -673,6 +711,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                     />
                   )}
                 </article>
+                {ended && browserCards(ended.browsers)}
                 {ended && (
                   <p
                     className={`notice ${ended.status === "failed" ? "notice-danger" : ""}`}
@@ -704,13 +743,8 @@ export function AppShell({ chatId }: { chatId: string }) {
               </div>
             </article>
           )}
-          {working && activeRun?.browser && (
-            <BrowserCard
-              browser={activeRun.browser}
-              onChange={(view) =>
-                setActiveRun((run) => (run && run.browser ? { ...run, browser: view } : run))
-              }
-            />
+          {working && activeRun && activeRun.browsers.length > 0 && (
+            <div>{browserCards(activeRun.browsers)}</div>
           )}
           {working && (
             <div className="progress" role="status">
@@ -809,6 +843,14 @@ export function AppShell({ chatId }: { chatId: string }) {
         >
           This deletes the side chat and all of its messages. It can&apos;t be undone.
         </ConfirmDialog>
+      )}
+      {previewBrowser && (
+        <BrowserPanel
+          browser={previewBrowser}
+          takeControlNow={preview!.takeControl}
+          onChange={updateBrowser}
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   );

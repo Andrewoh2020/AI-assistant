@@ -25,15 +25,41 @@ export interface FileView {
   kind: "upload" | "download";
 }
 
-/** A browser the assistant is using right now. Only ever sent to its owner. */
+export type BrowserStatus =
+  "starting" | "running" | "needs_user" | "user_control" | "done" | "failed" | "stopped";
+
+export interface BrowserTabView {
+  url: string;
+  title: string | null;
+  /** The tab the browser was showing. */
+  active: boolean;
+}
+
+/** A browser job the assistant ran, live or finished. Only ever sent to its owner. */
 export interface BrowserView {
   id: string;
   /** needs_user: the agent asked the person to do something. user_control: they took over. */
-  status: "starting" | "running" | "needs_user" | "user_control";
+  status: BrowserStatus;
+  /**
+   * The status in Muse's words: Working on it, Browsing, Sign-in needed, You're in control,
+   * Done, Site blocked, Couldn't finish, Stopped.
+   */
+  label: string;
+  /** A short name for the job, like "Check GitHub notifications". */
+  title: string;
+  /** The site it is on, like "github.com". */
+  site: string | null;
+  tabs: BrowserTabView[];
   step: string | null;
   needsUser: string | null;
   /** The live browser. Works like a password while the browser is open; never share it. */
   liveUrl: string | null;
+  /** The last picture of the page, if there is one (see fileViewUrl). */
+  screenshotId: string | null;
+  /** The browser has closed; only the last picture is left. */
+  closed: boolean;
+  /** It failed, was blocked or was stopped (the card's globe turns red). */
+  failed: boolean;
 }
 
 export interface MessageView {
@@ -43,6 +69,8 @@ export interface MessageView {
   reasoning: string | null;
   sources: SourceView[];
   files: FileView[];
+  /** Browser jobs behind this answer, shown as cards above it. */
+  browsers: BrowserView[];
   createdAt: string;
   runId: string | null;
   clientMessageId: string | null;
@@ -55,7 +83,8 @@ export interface RunView {
   statusLine: string | null;
   error: string | null;
   message: MessageView | null;
-  browser: BrowserView | null;
+  /** Browser jobs in this run so far, oldest first. */
+  browsers: BrowserView[];
 }
 
 export interface ChatSummary {
@@ -157,6 +186,8 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
       return data as { file: FileView };
     },
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
+    /** Shows an image file in the page (browser pictures). */
+    fileViewUrl: (id: string) => `${baseUrl}/files/${id}/view`,
     takeOverBrowser: (id: string) =>
       call<{ browser: BrowserView }>("POST", `/browser-sessions/${id}/take-over`, {}),
     handBackBrowser: (id: string) =>

@@ -1,3 +1,4 @@
+import { captureOverCdp, type Capture } from "./cdp.js";
 import { HttpError } from "./http.js";
 
 /**
@@ -61,6 +62,8 @@ export interface BrowserUse {
   /** Files in the workspace under `prefix`. With urls, each has a download link valid for 60 seconds. */
   listFiles(workspaceId: string, prefix: string, urls: boolean): Promise<BuFile[]>;
   download(url: string, maxBytes: number): Promise<Uint8Array>;
+  /** A picture of the page an open browser is showing, and its tabs. Null once it has closed. */
+  capture(browserId: string): Promise<Capture | null>;
 }
 
 const TERMINAL = new Set<BuRunStatus>(["completed", "failed", "cancelled"]);
@@ -185,5 +188,16 @@ export class BrowserUseHttp implements BrowserUse {
     const data = new Uint8Array(await res.arrayBuffer());
     if (data.byteLength > maxBytes) throw new Error(`File is larger than ${maxBytes} bytes`);
     return data;
+  }
+
+  async capture(browserId: string) {
+    const b = await this.call<{ status: string; cdpUrl: string | null }>(
+      "GET",
+      `/browsers/${browserId}`,
+      undefined,
+      { retries: 0, timeoutMs: 10000 },
+    );
+    if (b.status !== "active" || !b.cdpUrl) return null;
+    return captureOverCdp(b.cdpUrl);
   }
 }
