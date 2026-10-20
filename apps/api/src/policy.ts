@@ -12,7 +12,8 @@ export type Resolver = (host: string) => Promise<string[]>;
 const defaultResolver: Resolver = async (host) =>
   (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
-const ALLOWED_TOOLS = new Set(["web_search", "fetch_page", "memory_search"]);
+const ALLOWED_TOOLS = new Set(["web_search", "fetch_page", "browse", "memory_search"]);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function decide(
   tool: string,
@@ -31,6 +32,25 @@ export async function decide(
       };
     }
     return { decision: "allow" };
+  }
+  if (tool === "browse") {
+    const task = args.task;
+    if (typeof task !== "string" || !task.trim())
+      return { decision: "deny", reason: "task is required" };
+    if (task.length > 4000) return { decision: "deny", reason: "task is too long" };
+    const ids = args.file_ids ?? [];
+    if (
+      !Array.isArray(ids) ||
+      ids.length > 10 ||
+      !ids.every((id) => typeof id === "string" && UUID.test(id))
+    ) {
+      return { decision: "deny", reason: "file_ids must be a list of up to 10 file ids" };
+    }
+    if (args.url === undefined || args.url === null || args.url === "")
+      return { decision: "allow" };
+    // The browser runs in Browser Use's cloud, but private addresses are refused all the same.
+    const start = await checkUrl(args.url, resolve);
+    return start.ok ? { decision: "allow" } : { decision: "deny", reason: start.reason };
   }
   // fetch_page
   const check = await checkUrl(args.url, resolve);

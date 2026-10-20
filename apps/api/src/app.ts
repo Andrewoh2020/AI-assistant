@@ -8,7 +8,10 @@ import {
   verifySession,
   type SessionPayload,
 } from "./auth.js";
+import { handBack, takeOver, viewOf } from "./browser.js";
+import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
+import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
 import {
   advanceRun,
   Conflict,
@@ -37,8 +40,10 @@ export interface AppDeps {
   sql: Sql;
   travila: Travila;
   search: SearchBackend;
+  browser: BrowserUse;
   defer?: (work: Promise<unknown>) => void;
   resolve?: Resolver;
+  browserCheckGapMs?: number;
 }
 
 declare module "fastify" {
@@ -68,12 +73,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     sql,
     travila: deps.travila,
     search: deps.search,
+    browser: deps.browser,
+    secret: config.sessionSecret,
     defer: deps.defer,
     resolve: deps.resolve,
+    browserCheckGapMs: deps.browserCheckGapMs,
   };
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 64 * 1024 });
 
   app.register(cookie);
+  // File uploads arrive as the file's own bytes (any type other than JSON).
+  app.addContentTypeParser(
+    "*",
+    { parseAs: "buffer", bodyLimit: MAX_FILE_BYTES },
+    (_req, body, done) => done(null, body),
+  );
   app.decorateRequest("session", null);
 
   app.addHook("preHandler", async (req) => {
@@ -253,7 +267,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const s = requireSession(req, reply);
     if (!s) return;
     if (!UUID.test(req.params.id)) throw new NotFound("chat");
-    const { chat, messages, activeRun, endedRuns } = await getChat(sql, s, req.params.id);
+    const { chat, messages, activeRun, endedRuns } = await getChat(
+      orchestratorDeps,
+      s,
+      req.params.id,
+    );
     return { chat: chatSummary(chat), messages, activeRun, endedRuns };
   });
 
@@ -269,7 +287,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (text.length > 8000)
       return reply.code(400).send({ error: "That message is too long (8,000 characters max)." });
     if (!clientMessageId) return reply.code(400).send({ error: "clientMessageId is required" });
-    return sendMessage(orchestratorDeps, s, req.params.id, { text, clientMessageId });
+    const fileIds = Array.isArray(b.fileIds) ? b.fileIds : [];
+    if (fileIds.length > 10 || !fileIds.every((id) => typeof id === "string" && UUID.test(id))) {
+      return reply.code(400).send({ error: "Attach at most 10 files." });
+    }
+    return sendMessage(orchestratorDeps, s, req.params.id, {
+      text,
+      clientMessageId,
+      fileIds: fileIds as string[],
+    });
   });
 
   // Runs -------------------------------------------------------------------------
@@ -286,6 +312,89 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!s) return;
     if (!UUID.test(req.params.id)) throw new NotFound("run");
     return { run: await stopRun(orchestratorDeps, s, req.params.id) };
+  });
+
+  // Files -------------------------------------------------------------------------
+
+  app.post<{ Querystring: { chatId?: string } }>(
+    "/files",
+    { bodyLimit: MAX_FILE_BYTES },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      const data = req.body;
+      if (!Buffer.isBuffer(data) || !data.byteLength) {
+        return reply.code(400).send({ error: "Choose a file to upload." });
+      }
+      const chatId = req.query.chatId;
+      if (chatId) {
+        if (!UUID.test(chatId)) throw new NotFound("chat");
+        const [chat] = await withUser(
+          sql,
+          s.userId,
+          (tx) => tx`SELECT 1 FROM chats WHERE id = ${chatId}`,
+        );
+        if (!chat) throw new NotFound("chat");
+      }
+      let name = "file";
+      try {
+        name = decodeURIComponent(String(req.headers["x-file-name"] ?? "file"));
+      } catch {
+        // Keep the default name.
+      }
+      const file = await saveFile(sql, s.userId, {
+        kind: "upload",
+        name: cleanFileName(name),
+        mime: String(req.headers["content-type"] ?? "application/octet-stream").split(";")[0]!,
+        data,
+        chatId: chatId ?? null,
+      });
+      return { file: fileView(file) };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/files/:id/download", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("file");
+    const stored = await readFile(sql, s.userId, req.params.id);
+    if (!stored) throw new NotFound("file");
+    const name = stored.file.name ?? "file";
+    const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+    return reply
+      .header("Content-Type", stored.file.mime ?? "application/octet-stream")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      )
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Cache-Control", "private, no-store")
+      .send(stored.data);
+  });
+
+  // Browser ---------------------------------------------------------------------------
+
+  const browserDeps = () => ({
+    sql,
+    browser: deps.browser,
+    secret: config.sessionSecret,
+    checkGapMs: deps.browserCheckGapMs,
+  });
+
+  app.post<{ Params: { id: string } }>("/browser-sessions/:id/take-over", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("browser session");
+    const row = await takeOver(browserDeps(), s.userId, req.params.id);
+    return { browser: viewOf(row, config.sessionSecret) };
+  });
+
+  app.post<{ Params: { id: string } }>("/browser-sessions/:id/hand-back", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("browser session");
+    const row = await handBack(browserDeps(), s.userId, req.params.id);
+    return { browser: viewOf(row, config.sessionSecret) };
   });
 
   return app;

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { withUser, type Sql } from "@ai-assistant/db";
+import { startBrowse } from "./browser.js";
+import type { BrowserUse } from "./browseruse.js";
 import { decide, type Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
@@ -16,6 +18,9 @@ export interface ToolContext {
 export interface ToolDeps {
   search: SearchBackend;
   travila: Travila;
+  browser: BrowserUse;
+  /** Seals stored secrets such as live browser links. */
+  secret: string;
   /** DNS lookup used by the SSRF check; replaceable in tests. */
   resolve?: Resolver;
 }
@@ -25,7 +30,7 @@ interface NewSource {
   title: string;
   siteName?: string;
   date?: string;
-  origin: "search" | "fetch";
+  origin: "search" | "fetch" | "browse";
   contentHash?: string;
   injection: boolean;
 }
@@ -58,7 +63,7 @@ export async function claimToolCall(
  * Records sources for a run and gives each a citation number. The same URL keeps its number.
  * Runs under a per-run lock so parallel tool calls never hand out the same number twice.
  */
-async function registerSources(
+export async function registerSources(
   ctx: ToolContext,
   toolCallId: string,
   sources: NewSource[],
@@ -97,7 +102,7 @@ async function registerSources(
   });
 }
 
-async function finishToolCall(
+export async function finishToolCall(
   ctx: ToolContext,
   toolCallId: string,
   fields: {
@@ -118,13 +123,16 @@ async function finishToolCall(
   );
 }
 
-/** Runs one tool call through the policy gate and the tool, and returns what goes back to the model. */
+/**
+ * Runs one tool call through the policy gate and the tool, and returns what goes back to the model.
+ * Returns null for browse, which only starts here and is finished by later polls (browser.ts).
+ */
 export async function runTool(
   ctx: ToolContext,
   deps: ToolDeps,
   toolCallId: string,
   call: TravilaToolCall,
-): Promise<Record<string, unknown>> {
+): Promise<Record<string, unknown> | null> {
   const args = call.argumentsJson ?? {};
   const verdict = await decide(call.name, args, deps.resolve);
   if (verdict.decision === "deny") {
@@ -167,6 +175,16 @@ export async function runTool(
         })
         .join("\n\n");
       return { content: fence("web search results", body), cite_as: "[n]" };
+    }
+
+    if (call.name === "browse") {
+      await startBrowse(
+        { sql: ctx.sql, browser: deps.browser, secret: deps.secret },
+        { userId: ctx.userId, runId: ctx.runId },
+        toolCallId,
+        args,
+      );
+      return null;
     }
 
     if (call.name === "fetch_page") {
@@ -225,6 +243,7 @@ export async function runTool(
 export function statusLineFor(calls: TravilaToolCall[]): string {
   const searches = calls.filter((c) => c.name === "web_search");
   const pages = calls.filter((c) => c.name === "fetch_page");
+  if (calls.some((c) => c.name === "browse")) return "Using the browser";
   if (pages.length) return pages.length === 1 ? "Reading 1 page" : `Reading ${pages.length} pages`;
   if (searches.length === 1)
     return `Searching: ${String(searches[0]!.argumentsJson?.query ?? "").slice(0, 80)}`;
@@ -237,6 +256,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
 export function doneLineFor(calls: TravilaToolCall[]): string {
   const pages = calls.filter((c) => c.name === "fetch_page").length;
   const searches = calls.filter((c) => c.name === "web_search").length;
+  if (calls.some((c) => c.name === "browse")) return "Reading the browser's report";
   if (pages) return pages === 1 ? "Read 1 page, thinking" : `Read ${pages} pages, thinking`;
   if (searches) return "Reading the search results";
   return "Thinking";

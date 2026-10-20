@@ -1,5 +1,11 @@
 import "server-only";
-import { buildApp, DeepSeekSearch, loadConfig, TravilaHttp } from "@ai-assistant/api";
+import {
+  BrowserUseHttp,
+  buildApp,
+  DeepSeekSearch,
+  loadConfig,
+  TravilaHttp,
+} from "@ai-assistant/api";
 import { connect } from "@ai-assistant/db";
 import { waitUntil } from "@vercel/functions";
 import type { FastifyInstance } from "fastify";
@@ -18,6 +24,7 @@ export function backend(): Promise<FastifyInstance> {
       sql: connect(config.databaseUrl, { max: 3 }),
       travila: new TravilaHttp(config.travilaBase, config.travilaKey),
       search: new DeepSeekSearch(config.deepseekBase, config.deepseekKey),
+      browser: new BrowserUseHttp(config.browserUseBase, config.browserUseKey),
       // Lets tool work finish after the poll's response is sent.
       defer: (work) => waitUntil(work),
     });

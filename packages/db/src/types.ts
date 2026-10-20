@@ -13,6 +13,7 @@ export interface ChatRow {
   clean_room: boolean;
   pinned: boolean;
   archived_at: Date | null;
+  travila_profile_version: string | null;
 }
 
 export type MessagePart =
@@ -86,4 +87,50 @@ export interface SourceRow {
   ref_number: number | null;
   site_name: string | null;
   published_at: Date | null;
+}
+
+export interface FileRow {
+  id: string;
+  user_id: string;
+  created_at: Date;
+  kind: "upload" | "generated" | "artifact" | "browser_download";
+  storage: "travila" | "browser_use_workspace" | "own";
+  storage_key: string;
+  name: string | null;
+  mime: string | null;
+  bytes: string | number | null;
+  sha256: string | null;
+  chat_id: string | null;
+  run_id: string | null;
+  bu_path: string | null;
+}
+
+export type BrowserSessionStatus =
+  "starting" | "running" | "needs_user" | "user_control" | "done" | "failed" | "stopped";
+
+export interface BrowserSessionRow {
+  id: string;
+  user_id: string;
+  created_at: Date;
+  run_id: string | null;
+  tool_call_id: string | null;
+  bu_session_id: string | null;
+  bu_browser_id: string | null;
+  bu_profile_id: string | null;
+  bu_workspace_id: string | null;
+  bu_run_id: string | null;
+  status: BrowserSessionStatus;
+  live_view_url_ciphertext: string | null;
+  user_took_over_at: Date | null;
+  task: string | null;
+  step: string | null;
+  needs_user: string | null;
+  result: string | null;
+  error: string | null;
+  events_after: string | number;
+  outputs_before: Record<string, string>;
+  cost_usd: string | null;
+  checked_at: Date | null;
+  waiting_since: Date | null;
+  finished_at: Date | null;
 }

@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { groundAnswer } from "./citations.js";
-import { checkUrl, isPrivateAddress, looksPrivate } from "./policy.js";
+import { checkUrl, decide, isPrivateAddress, looksPrivate } from "./policy.js";
 import { cleanTitle, unescapeMarkdown } from "./search.js";
 import { detectInjection, fence } from "./untrusted.js";
-import { signSession, verifySession, hashPassword, verifyPassword } from "./auth.js";
+import {
+  hashPassword,
+  openSecret,
+  sealSecret,
+  signSession,
+  verifyPassword,
+  verifySession,
+} from "./auth.js";
+import { cleanFileName } from "./files.js";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -98,5 +106,50 @@ describe("sessions and passwords", () => {
     const h = await hashPassword("pw-1234567890");
     expect(await verifyPassword("pw-1234567890", h)).toBe(true);
     expect(await verifyPassword("wrong", h)).toBe(false);
+  });
+});
+
+describe("browse policy", () => {
+  const publicResolver = async () => ["93.184.216.34"];
+  it("allows a task, with or without a public start page and file ids", async () => {
+    expect((await decide("browse", { task: "Read it" }, publicResolver)).decision).toBe("allow");
+    const withAll = await decide(
+      "browse",
+      {
+        task: "Read it",
+        url: "https://example.com/",
+        file_ids: ["0b6f2c1e-6a51-4c5e-9d8e-0f4a2b1c3d4e"],
+      },
+      publicResolver,
+    );
+    expect(withAll.decision).toBe("allow");
+  });
+
+  it("refuses no task, private start pages and odd file ids", async () => {
+    expect((await decide("browse", {}, publicResolver)).decision).toBe("deny");
+    expect(
+      (await decide("browse", { task: "x", url: "http://169.254.169.254/" }, publicResolver))
+        .decision,
+    ).toBe("deny");
+    expect(
+      (await decide("browse", { task: "x", file_ids: ["../../etc/passwd"] }, publicResolver))
+        .decision,
+    ).toBe("deny");
+  });
+});
+
+describe("sealed secrets and file names", () => {
+  it("seals and opens a live view link, and refuses a wrong key", () => {
+    const sealed = sealSecret("https://live.example/abc", "secret-one");
+    expect(sealed).not.toContain("live.example");
+    expect(openSecret(sealed, "secret-one")).toBe("https://live.example/abc");
+    expect(openSecret(sealed, "secret-two")).toBeNull();
+  });
+
+  it("keeps file names safe", () => {
+    expect(cleanFileName("../../etc/passwd")).toBe("passwd");
+    expect(cleanFileName("C:\\Users\\me\\report.pdf")).toBe("report.pdf");
+    expect(cleanFileName(".hidden")).toBe("hidden");
+    expect(cleanFileName("")).toBe("file");
   });
 });

@@ -4,6 +4,8 @@ import type { ToolDefinition } from "@ai-assistant/agent";
 /** The parts of Travila's conversation API we use. Swappable for a fake in tests. */
 export interface Travila {
   createThread(userId: string, input: CreateThreadInput): Promise<string>;
+  /** Replaces a thread's model, instructions and tools (used when they change after it was made). */
+  updateThreadConfig(userId: string, threadId: string, input: CreateThreadInput): Promise<void>;
   sendMessage(userId: string, threadId: string, text: string): Promise<string>;
   getState(userId: string, threadId: string): Promise<TravilaState>;
   listPendingClientTools(userId: string, threadId: string): Promise<TravilaToolCall[]>;
@@ -29,6 +31,21 @@ export interface CreateThreadInput {
   timezone: string;
   memory: boolean;
   maxLoops: number;
+  clientToolTimeoutMs: number;
+}
+
+function generationConfig(input: CreateThreadInput) {
+  return {
+    models: input.models,
+    systemPrompt: input.systemPrompt,
+    reasoning: { effort: input.reasoningEffort, exclude: false },
+    clientTools: input.clientTools,
+    toolPolicy: { clientToolTimeoutMs: input.clientToolTimeoutMs },
+    timeAware: { includeCurrentTime: true, timezone: input.timezone },
+    mem0: input.memory
+      ? { enabled: true, searchTopK: 5, searchThreshold: 0.15 }
+      : { enabled: false },
+  };
 }
 
 export interface TravilaContentPart {
@@ -79,16 +96,7 @@ export class TravilaHttp implements Travila {
   async createThread(userId: string, input: CreateThreadInput): Promise<string> {
     const res = await this.call<{ thread: { threadId: string } }>(userId, "create-thread", {
       title: input.title,
-      defaultGenerationConfig: {
-        models: input.models,
-        systemPrompt: input.systemPrompt,
-        reasoning: { effort: input.reasoningEffort, exclude: false },
-        clientTools: input.clientTools,
-        timeAware: { includeCurrentTime: true, timezone: input.timezone },
-        mem0: input.memory
-          ? { enabled: true, searchTopK: 5, searchThreshold: 0.15 }
-          : { enabled: false },
-      },
+      defaultGenerationConfig: generationConfig(input),
     });
     const threadId = res.thread.threadId;
     // Thread creation ignores settings, so they are applied separately.
@@ -99,6 +107,13 @@ export class TravilaHttp implements Travila {
       settings: { maxLoops: input.maxLoops, interruptPolicy: "INTERRUPT_POLICY_CANCEL_ONGOING" },
     });
     return threadId;
+  }
+
+  async updateThreadConfig(userId: string, threadId: string, input: CreateThreadInput) {
+    await this.call(userId, "update-default-generation-config", {
+      conversationKey: threadId,
+      defaultGenerationConfig: generationConfig(input),
+    });
   }
 
   async sendMessage(userId: string, threadId: string, text: string): Promise<string> {

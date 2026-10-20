@@ -1,4 +1,12 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  scrypt as scryptCb,
+  timingSafeEqual,
+} from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
@@ -48,6 +56,28 @@ export function verifySession(
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as SessionPayload;
     return payload.exp > nowSec ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Encrypts a short secret (such as a live browser link) before it is stored. AES-256-GCM. */
+export function sealSecret(plain: string, secret: string): string {
+  const key = createHash("sha256").update(`seal:${secret}`).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return [iv, cipher.getAuthTag(), data].map((b) => b.toString("base64url")).join(".");
+}
+
+/** Returns null if the value can't be opened (for example, the secret changed since). */
+export function openSecret(sealed: string, secret: string): string | null {
+  try {
+    const [iv, tag, data] = sealed.split(".").map((p) => Buffer.from(p, "base64url"));
+    const key = createHash("sha256").update(`seal:${secret}`).digest();
+    const decipher = createDecipheriv("aes-256-gcm", key, iv!);
+    decipher.setAuthTag(tag!);
+    return Buffer.concat([decipher.update(data!), decipher.final()]).toString("utf8");
   } catch {
     return null;
   }
