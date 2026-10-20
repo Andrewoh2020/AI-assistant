@@ -572,8 +572,10 @@ dialog.confirm p {
 .empty p {
   color: var(--ink-2);
 }
+/* Only the bottom margin: the column's own left and right margins center it. */
 .turn {
-  margin: 0 0 24px;
+  margin-top: 0;
+  margin-bottom: 24px;
 }
 .turn-user {
   display: flex;
@@ -1014,6 +1016,7 @@ dialog.confirm p {
 }
 .bcard-ask p {
   margin: 0 0 8px;
+  overflow-wrap: anywhere;
   font-size: var(--type-small-size);
 }
 .bcard-thumb {
@@ -1095,6 +1098,20 @@ dialog.confirm p {
 }
 .shell.has-preview .sidebar {
   display: none;
+}
+/* With the preview open, the chat list still opens over the chat from the Chat icon. */
+.shell.has-preview.panel-open .sidebar {
+  display: flex;
+  position: absolute;
+  left: var(--rail-width);
+  top: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  z-index: 6;
+  box-shadow: var(--shadow-2);
+}
+.shell.has-preview {
+  position: relative;
 }
 .bpanel {
   display: flex;

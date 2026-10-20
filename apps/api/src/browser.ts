@@ -198,6 +198,29 @@ export async function startBrowse(
   }
 }
 
+/**
+ * What the browser asks of the person, as one plain sentence for the card: no markdown, and
+ * web addresses shortened to their site ("github.com" rather than a long sign-in link).
+ */
+export function plainAsk(raw: string): string {
+  const text = raw
+    .trim()
+    .split("\n")[0]!
+    .replace(/[`*_]/g, "")
+    .replace(/https?:\/\/[^\s)"'<>]+/g, (match) => {
+      // Punctuation after a link belongs to the sentence.
+      const [, url, tail] = /^(.*?)([.,;:!?]*)$/.exec(match)!;
+      try {
+        return new URL(url!).hostname.replace(/^www\./, "") + tail;
+      } catch {
+        return match;
+      }
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 200 ? text.slice(0, 197) + "..." : text;
+}
+
 /** The assistant's short name for the job, or the task's first words when it gave none. */
 export function jobTitle(given: unknown, task: string): string {
   const name = typeof given === "string" ? given.replace(/\s+/g, " ").trim() : "";
@@ -432,7 +455,7 @@ export async function advanceBrowse(
     return fail(`The website blocked the browser${why ? `: ${why}` : "."}`, { blocked: true });
   }
   if (report.startsWith("NEEDS_USER:")) {
-    const ask = report.slice("NEEDS_USER:".length).trim().split("\n")[0]!.slice(0, 300);
+    const ask = plainAsk(report.slice("NEEDS_USER:".length));
     await takePicture(deps, ctx, current);
     await update(
       deps,

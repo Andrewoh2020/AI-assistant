@@ -20,6 +20,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { api } from "@/lib/client";
 import { usePref } from "@/lib/prefs";
@@ -73,10 +74,33 @@ export function AppShell({ chatId }: { chatId: string }) {
   const panelToggleRef = useRef<HTMLAnchorElement>(null);
   // The browser shown in the right-hand preview panel.
   const [preview, setPreview] = useState<{ id: string; takeControl: boolean } | null>(null);
+  // The chat list opens over the chat (not beside it) when it isn't kept visible, or while the
+  // browser preview takes the room.
+  const floating = !keepPanel || !!preview;
+  // Opened by hovering over the Chat icon: it closes again when the pointer leaves.
+  const hoverOpened = useRef(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const hoverOpen = (e: ReactPointerEvent) => {
+    if (!floating || e.pointerType !== "mouse") return;
+    clearTimeout(hoverTimer.current);
+    if (!panelOpen) {
+      hoverOpened.current = true;
+      setPanelOpen(true);
+    }
+  };
+  const hoverLeave = (e: ReactPointerEvent) => {
+    if (e.pointerType !== "mouse" || !hoverOpened.current) return;
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => {
+      hoverOpened.current = false;
+      setPanelOpen(false);
+    }, 300);
+  };
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
 
   // A chat panel opened over the chat closes when you click anywhere else, or press Escape.
   useEffect(() => {
-    if (!panelOpen || keepPanel) return;
+    if (!panelOpen || !floating) return;
     const onPointer = (e: PointerEvent) => {
       const t = e.target as Node;
       if (!sidebarRef.current?.contains(t) && !panelToggleRef.current?.contains(t)) {
@@ -92,7 +116,7 @@ export function AppShell({ chatId }: { chatId: string }) {
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
     };
-  }, [panelOpen, keepPanel]);
+  }, [panelOpen, floating]);
 
   const handleAuth = useCallback(
     (err: unknown) => {
@@ -430,7 +454,7 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   function picked() {
     setNavOpen(false);
-    if (!keepPanel) setPanelOpen(false);
+    if (floating) setPanelOpen(false);
   }
 
   async function signOut() {
@@ -483,6 +507,16 @@ export function AppShell({ chatId }: { chatId: string }) {
     ));
   }
 
+  // A browser waiting on the person: the chat says so instead of "working".
+  const waitingBrowser = activeRun?.browsers.find(
+    (b) => b.status === "needs_user" || b.status === "user_control",
+  );
+  const waitingFor = !waitingBrowser
+    ? null
+    : waitingBrowser.status === "needs_user"
+      ? "Waiting for you to sign in in the browser"
+      : "Waiting for you to hand the browser back";
+
   const mainChat = chats.find((c) => c.kind === "main");
   const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
   const archivedChats = chats.filter((c) => c.archived);
@@ -498,7 +532,7 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   return (
     <div
-      className={`shell ${navOpen ? "nav-open" : ""} ${keepPanel ? "" : "panel-floating"} ${panelShown ? "" : "sidebar-hidden"} ${previewBrowser ? "has-preview" : ""}`}
+      className={`shell ${navOpen ? "nav-open" : ""} ${keepPanel ? "" : "panel-floating"} ${panelShown ? "" : "sidebar-hidden"} ${previewBrowser ? "has-preview" : ""} ${panelOpen ? "panel-open" : ""}`}
     >
       <a className="skip-link" href="#composer-input">
         Skip to the message box
@@ -512,12 +546,17 @@ export function AppShell({ chatId }: { chatId: string }) {
             aria-label="Chat"
             title="Chat"
             ref={panelToggleRef}
-            aria-expanded={keepPanel ? undefined : panelOpen}
+            aria-expanded={floating ? panelOpen : undefined}
+            onPointerEnter={hoverOpen}
+            onPointerLeave={hoverLeave}
             onClick={(e) => {
               // With the panel not kept visible, Chat opens the chat list over the chat.
-              if (keepPanel) return;
+              if (!floating) return;
               e.preventDefault();
-              setPanelOpen(!panelOpen);
+              clearTimeout(hoverTimer.current);
+              // A click on a list hovering opened keeps it open; otherwise it toggles.
+              if (hoverOpened.current) hoverOpened.current = false;
+              else setPanelOpen(!panelOpen);
             }}
           >
             <ChatIcon />
@@ -547,7 +586,13 @@ export function AppShell({ chatId }: { chatId: string }) {
         </Menu>
       </nav>
 
-      <nav className="sidebar" aria-label="Chats" ref={sidebarRef}>
+      <nav
+        className="sidebar"
+        aria-label="Chats"
+        ref={sidebarRef}
+        onPointerEnter={() => clearTimeout(hoverTimer.current)}
+        onPointerLeave={hoverLeave}
+      >
         <div className="sidebar-head">
           <label className="search">
             <SearchIcon />
@@ -670,7 +715,7 @@ export function AppShell({ chatId }: { chatId: string }) {
         {working && (
           <div className="working-pill" role="status">
             <strong>Assistant</strong>
-            <span>is working</span>
+            <span>{waitingFor ? "is waiting for you" : "is working"}</span>
           </div>
         )}
         <div className="messages" aria-live="polite">
@@ -749,7 +794,7 @@ export function AppShell({ chatId }: { chatId: string }) {
           {working && (
             <div className="progress" role="status">
               <span className="dots" aria-hidden="true" />
-              <span>{activeRun?.statusLine || "Thinking"}…</span>
+              <span>{waitingFor ?? `${activeRun?.statusLine || "Thinking"}…`}</span>
             </div>
           )}
           <div ref={bottomRef} />

@@ -13,7 +13,7 @@ import {
 } from "./auth.js";
 import { cleanFileName } from "./files.js";
 import { extractText } from "./extract.js";
-import { jobTitle } from "./browser.js";
+import { jobTitle, plainAsk } from "./browser.js";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -190,5 +190,17 @@ describe("browser job names", () => {
       "Find the cheapest flight to",
     );
     expect(jobTitle("", "")).toBe("Browser task");
+  });
+});
+
+describe("browser sign-in requests", () => {
+  it("are one plain sentence with sites instead of long links", () => {
+    expect(
+      plainAsk(
+        " GitHub redirected to the sign-in page at `https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fnotifications`; please sign in, then hand it back.\nMore",
+      ),
+    ).toBe(
+      "GitHub redirected to the sign-in page at github.com; please sign in, then hand it back.",
+    );
   });
 });
