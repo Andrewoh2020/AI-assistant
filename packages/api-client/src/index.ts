@@ -140,7 +140,10 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
         method: "POST",
         credentials: "include",
         headers: {
-          "Content-Type": file.type || "application/octet-stream",
+          // Always raw bytes; the real type goes in X-File-Type so text and JSON files aren't
+          // mistaken for a request body.
+          "Content-Type": "application/octet-stream",
+          "X-File-Type": file.type || "application/octet-stream",
           "X-File-Name": encodeURIComponent(file.name),
         },
         body: file,
