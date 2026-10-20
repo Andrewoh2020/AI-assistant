@@ -154,7 +154,10 @@ export interface BrowserSessionRow {
   /** "Signed in to github.com with your saved login" */
   sign_in_note: string | null;
   /** Why the box is showing again: the site turned down the last sign-in. */
-  ask_problem: "saved_rejected" | "typed_rejected" | null;
+  ask_problem: "saved_rejected" | "typed_rejected" | "saved_code_rejected" | null;
+  /** The last one-time code sent: typed in the box, or made from a saved authenticator key. */
+  code_by: "typed" | "saved" | null;
+  code_site: string | null;
   /** A saved login the person asked to approve first: its account ('' for none), else null. */
   ask_saved_account: string | null;
 }
@@ -178,7 +181,10 @@ export interface AuditEventRow {
     | "deleted"
     | "imported"
     | "ask_on"
-    | "ask_off";
+    | "ask_off"
+    | "code_saved"
+    | "code_removed"
+    | "code_used";
   site: string | null;
   account: string | null;
   detail: string | null;

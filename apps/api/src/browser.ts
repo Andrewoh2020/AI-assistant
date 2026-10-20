@@ -13,8 +13,10 @@ import { MAX_FILE_BYTES, mimeFor, readFile, saveFile } from "./files.js";
 import { BadRequest, Conflict, NotFound } from "./errors.js";
 import { detectInjection, fence } from "./untrusted.js";
 import {
+  codeForRun,
   findLogin,
   loginForRun,
+  loginSummary,
   recordResult,
   saveLogin,
   vaultKeyFrom,
@@ -492,6 +494,9 @@ async function check(
       if (page && hostOf(page) === current.sign_in_site && !looksLikeSignIn(page)) {
         await signInWorked(deps, ctx, current);
       }
+      if (page && hostOf(page) === current.code_site && !looksLikeSignIn(page)) {
+        await savedCodeWorked(deps, ctx, current);
+      }
     }
     return null;
   }
@@ -538,6 +543,28 @@ async function check(
     if (kind === "code" && sentHere) {
       // Asked for a code: the site took the sign-in.
       await signInWorked(deps, ctx, current);
+    }
+    if (kind === "code") {
+      const codeHere = !!current.code_by && current.code_site === site;
+      if (codeHere && current.code_by === "saved") {
+        // The code from the saved key was turned down (a clock or key problem): ask the person.
+        fields.ask_problem = "saved_code_rejected";
+      } else if (!codeHere) {
+        // The sign-in ladder, 2-step: a saved authenticator key for this site makes the code.
+        const saved =
+          sentHere && current.vault_credential_id
+            ? await loginSummary(deps.sql, ctx.userId, current.vault_credential_id)
+            : await findLogin(deps.sql, ctx.userId, site!);
+        // A login set to "Ask before using" that the person just approved counts as approved.
+        const approved = !saved?.askBeforeUse || (sentHere && current.sign_in_by === "saved");
+        if (saved?.hasCodeKey && approved && saved.site === site) {
+          const row = await useSavedCode(deps, ctx, current, site!, saved.id).catch((err) => {
+            console.error(`browse ${s.id}: saved code didn't start (${(err as Error).name})`);
+            return null;
+          });
+          if (row) return null;
+        }
+      }
     }
     if (kind === "sign_in" && sentHere && !current.sign_in_note) {
       // Back on the sign-in page of the same site: the site turned the sign-in down.
@@ -588,7 +615,14 @@ async function check(
     result.cite_as = `[${n}]`;
   }
   if (files.length) result.note = "The user can download these files from your answer.";
-  const note = (await signInWorked(deps, ctx, current)) ?? current.sign_in_note;
+  await signInWorked(deps, ctx, current);
+  await savedCodeWorked(deps, ctx, current);
+  const [{ sign_in_note: note } = { sign_in_note: null }] = await withUser(
+    deps.sql,
+    ctx.userId,
+    (tx) => tx<{ sign_in_note: string | null }[]>`
+      SELECT sign_in_note FROM browser_sessions WHERE id = ${s.id}`,
+  );
   // So the answer can say how it signed in, instead of guessing.
   if (note) result.sign_in = note;
   const done = await update(
@@ -687,6 +721,8 @@ export async function handBack(deps: BrowserDeps, userId: string, id: string) {
         // They signed in themselves, if at all; a later sign-in page isn't a turned-down login.
         sign_in_by: null,
         sign_in_site: null,
+        code_by: null,
+        code_site: null,
         waiting_since: null,
         step: "Continuing from where you left it",
       },
@@ -804,6 +840,27 @@ async function sendSignIn(
   );
 }
 
+/** Types a 2-step code made from the saved authenticator key. Null if there is none. */
+async function useSavedCode(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+  site: string,
+  credentialId: string,
+): Promise<BrowserSessionRow | null> {
+  const code = await codeForRun(
+    deps.sql,
+    vaultKey(deps),
+    ctx.userId,
+    credentialId,
+    site,
+    s.id,
+    deps.now?.() ?? new Date(),
+  );
+  if (!code) return null;
+  return sendCode(deps, ctx, s, site, code, "saved");
+}
+
 /** Fills a saved login from the vault. Null if it can't be opened. */
 async function useSavedLogin(
   deps: BrowserDeps,
@@ -892,42 +949,69 @@ export async function signIn(
 
   const code = input.code?.replace(/\s+/g, "") ?? "";
   if (!code || code.length > 64) throw new BadRequest("Enter the code.");
+  return (await guarded(s, () => sendCode(deps, ctx, s, site, code, "typed"))) ?? s;
+}
+
+/** Starts the follow-up run that types a one-time code into the page, on `site` only. */
+async function sendCode(
+  deps: BrowserDeps,
+  ctx: BrowseContext,
+  s: BrowserSessionRow,
+  site: string,
+  code: string,
+  by: "typed" | "saved",
+): Promise<BrowserSessionRow | null> {
   const task = [
-    `The person has given you the one-time code ${site} asked for. It is the secret named "login_code".`,
+    by === "saved"
+      ? `The 2-step code for ${site} is ready for you. It is the secret named "login_code".`
+      : `The person has given you the one-time code ${site} asked for. It is the secret named "login_code".`,
     "You can't see it: ask for the secret by its name to have it typed into the field that has focus. Focus the code field with element.focus() first. Never read back what was typed.",
-    "Type it into the code field, submit it, then continue and finish the original task, following the same rules.",
+    "Type it into the code field straight away, submit it, then continue and finish the original task, following the same rules.",
     'If the code is refused, stop and make your final reply start with "NEEDS_CODE:" and say what the site showed.',
   ].join("\n");
-  const run = await guarded(s, () =>
-    deps.browser.createRun({
-      task,
-      secrets: [{ alias: "login_code", value: code, allowedDomains: [site] }],
-      sessionId: s.bu_session_id!,
-      workspaceId: s.bu_workspace_id ?? undefined,
-      profileId: s.bu_profile_id ?? undefined,
-      maxCostUsd: MAX_COST_USD,
-      keepAlive: KEEP_ALIVE_S,
-    }),
+  const run = await deps.browser.createRun({
+    task,
+    secrets: [{ alias: "login_code", value: code, allowedDomains: [site] }],
+    sessionId: s.bu_session_id!,
+    workspaceId: s.bu_workspace_id ?? undefined,
+    profileId: s.bu_profile_id ?? undefined,
+    maxCostUsd: MAX_COST_USD,
+    keepAlive: KEEP_ALIVE_S,
+  });
+  return update(
+    deps,
+    ctx,
+    s.id,
+    {
+      status: "running",
+      bu_run_id: run.id,
+      events_after: 0,
+      needs_user: null,
+      ask_kind: null,
+      ask_site: null,
+      ask_problem: null,
+      ask_saved_account: null,
+      waiting_since: null,
+      step: by === "saved" ? "Entering the 2-step code from your vault" : "Entering your code",
+      code_by: by,
+      code_site: site,
+    },
+    [s.status],
   );
-  return (
-    (await update(
-      deps,
-      ctx,
-      s.id,
-      {
-        status: "running",
-        bu_run_id: run.id,
-        events_after: 0,
-        needs_user: null,
-        ask_kind: null,
-        ask_site: null,
-        ask_problem: null,
-        ask_saved_account: null,
-        waiting_since: null,
-        step: "Entering your code",
-      },
-      ["needs_user"],
-    )) ?? s
+}
+
+/**
+ * The site took a code made from the saved key: the card says so. Once per browser session
+ * (the note changes only the first time).
+ */
+async function savedCodeWorked(deps: BrowserDeps, ctx: BrowseContext, s: BrowserSessionRow) {
+  if (s.code_by !== "saved" || !s.code_site) return;
+  const note = `Signed in to ${s.code_site} with your saved login and 2-step code`;
+  await withUser(
+    deps.sql,
+    ctx.userId,
+    (tx) => tx`UPDATE browser_sessions SET sign_in_note = ${note}
+               WHERE id = ${s.id} AND sign_in_note IS DISTINCT FROM ${note}`,
   );
 }
 
@@ -1016,7 +1100,10 @@ export function viewOf(s: BrowserSessionRow, secret: string): BrowserView {
         ? {
             kind: s.ask_kind,
             site: s.ask_site,
-            problem: s.ask_kind === "sign_in" ? s.ask_problem : null,
+            problem:
+              s.ask_kind === "sign_in" || s.ask_problem === "saved_code_rejected"
+                ? s.ask_problem
+                : null,
             savedAccount: s.ask_kind === "sign_in" ? s.ask_saved_account : null,
           }
         : null,

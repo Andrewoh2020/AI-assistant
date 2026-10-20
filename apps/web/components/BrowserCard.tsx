@@ -133,7 +133,9 @@ function SignInBox({
         <p className="bsign-problem" role="alert">
           {problem === "saved_rejected"
             ? `${site} rejected the saved login. Type the new one and it will replace the old one.`
-            : `${site} didn't accept that sign-in. Check it and try again.`}
+            : problem === "saved_code_rejected"
+              ? `${site} didn't take the code from your saved authenticator key. Enter the code from your authenticator app.`
+              : `${site} didn't accept that sign-in. Check it and try again.`}
         </p>
       ) : (
         browser.needsUser && <p className="bsign-ask">{browser.needsUser}</p>

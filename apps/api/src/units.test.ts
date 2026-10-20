@@ -3,6 +3,8 @@ import { groundAnswer } from "./citations.js";
 import { checkUrl, decide, isPrivateAddress, looksPrivate } from "./policy.js";
 import { cleanTitle, unescapeMarkdown } from "./search.js";
 import { detectInjection, fence } from "./untrusted.js";
+import { parseCsv, readExport, siteOf } from "./vault-import.js";
+import { parseTotpKey, totp } from "./totp.js";
 import {
   hashPassword,
   openSecret,
@@ -202,5 +204,78 @@ describe("browser sign-in requests", () => {
     ).toBe(
       "GitHub redirected to the sign-in page at github.com; please sign in, then hand it back.",
     );
+  });
+});
+
+describe("password export files", () => {
+  it("reads quoted CSV with commas, quotes and newlines", () => {
+    expect(parseCsv('\uFEFFa,b\r\n"x, y","say ""hi""\nthere"\n')).toEqual([
+      ["a", "b"],
+      ["x, y", 'say "hi"\nthere'],
+    ]);
+  });
+
+  it("binds each login to its site", () => {
+    expect(siteOf("https://www.GitHub.com/login")).toEqual({ site: "github.com", path: "/login" });
+    expect(siteOf("accounts.google.com")).toEqual({ site: "accounts.google.com", path: null });
+    expect(siteOf("android://abc@com.example.app/")).toBeNull();
+    expect(siteOf("http://sn")).toBeNull();
+  });
+
+  it("reads Chrome, Firefox, Apple, 1Password, Bitwarden and LastPass files", () => {
+    const files = {
+      chrome: "name,url,username,password,note\ngithub.com,https://github.com/login,me,pw1,",
+      firefox:
+        '"url","username","password","httpRealm","formActionOrigin","guid"\n"https://github.com","me","pw1",,"https://github.com","{1}"',
+      apple: "Title,URL,Username,Password,Notes,OTPAuth\nGitHub,https://github.com/,me,pw1,,",
+      onepassword: "Title,Url,Username,Password,OTPAuth,Favorite\nGitHub,github.com,me,pw1,,false",
+      bitwarden:
+        "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,login,GitHub,,,0,https://github.com,me,pw1,\n,,note,Wifi,secret,,0,,,,",
+      lastpass:
+        "url,username,password,totp,extra,name,grouping,fav\nhttps://github.com,me,pw1,,,GitHub,,0\nhttp://sn,,,,note,Wifi,,0",
+    };
+    for (const [name, csv] of Object.entries(files)) {
+      const { logins } = readExport(csv);
+      expect(logins, name).toEqual([
+        expect.objectContaining({ site: "github.com", username: "me", password: "pw1" }),
+      ]);
+    }
+    expect(readExport(files.bitwarden).skipped).toEqual([
+      { index: 1, name: "Wifi", reason: "not_a_login" },
+    ]);
+  });
+
+  it("keeps the later of two rows for the same login, and refuses other files", () => {
+    const { logins, skipped } = readExport(
+      "url,username,password\nhttps://a.com,me,old\nhttps://a.com,me,new\nhttps://b.com,me,",
+    );
+    expect(logins.map((l) => l.password)).toEqual(["new"]);
+    expect(skipped).toMatchObject([{ reason: "no_password" }]);
+    expect(() => readExport("name,phone\nAnn,123")).toThrow(/doesn't look like a password export/);
+  });
+});
+
+describe("2-step codes", () => {
+  it("makes the RFC 6238 codes", () => {
+    const key = parseTotpKey("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")!;
+    expect(totp({ ...key, digits: 8 }, new Date(59 * 1000))).toBe("94287082");
+    expect(totp({ ...key, digits: 8 }, new Date(1111111109 * 1000))).toBe("07081804");
+    expect(totp({ ...key, digits: 8 }, new Date(2000000000 * 1000))).toBe("69279037");
+    expect(totp(key, new Date(59 * 1000))).toBe("287082");
+  });
+
+  it("reads setup keys and otpauth links, and nothing else", () => {
+    expect(parseTotpKey("jbsw y3dp ehpk 3pxp")).toEqual({
+      secret: "JBSWY3DPEHPK3PXP",
+      digits: 6,
+      period: 30,
+      algorithm: "SHA1",
+    });
+    expect(
+      parseTotpKey("otpauth://totp/GitHub:me?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&digits=8"),
+    ).toMatchObject({ secret: "JBSWY3DPEHPK3PXP", digits: 8 });
+    expect(parseTotpKey("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP")).toBeNull();
+    expect(parseTotpKey("123456")).toBeNull();
+    expect(parseTotpKey("steam://ABCDEF")).toBeNull();
   });
 });

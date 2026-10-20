@@ -60,7 +60,7 @@ export interface BrowserView {
     kind: "sign_in" | "code";
     site: string;
     /** The site turned down the last sign-in: the saved login, or the one just typed. */
-    problem: "saved_rejected" | "typed_rejected" | null;
+    problem: "saved_rejected" | "typed_rejected" | "saved_code_rejected" | null;
     /** A saved login set to "Ask before using": its account ('' if none), offered in the box. */
     savedAccount: string | null;
   } | null;
@@ -125,12 +125,35 @@ export interface VaultLogin {
   askBeforeUse: boolean;
   /** Whether the site took it the last time it was used. */
   lastResult: "worked" | "rejected" | null;
+  /** An authenticator key is saved, so the browser makes 2-step codes itself. */
+  hasCodeKey: boolean;
   source: "typed" | "imported";
   /** The password manager it was imported from. */
   importedFrom: string | null;
   savedAt: string;
   lastUsedAt: string | null;
   lastResultAt: string | null;
+}
+
+export type PasswordManager =
+  | "Apple Passwords"
+  | "Chrome"
+  | "Google Password Manager"
+  | "Edge"
+  | "Firefox"
+  | "Safari"
+  | "1Password"
+  | "Bitwarden"
+  | "LastPass"
+  | "Dashlane"
+  | "Proton Pass"
+  | "Other";
+
+/** What an export file holds, before anything is saved. Never the passwords. */
+export interface ImportPreview {
+  logins: { index: number; site: string; account: string; alreadySaved: boolean }[];
+  /** Entries left out: notes, cards, app-only logins, entries without a password. */
+  skipped: number;
 }
 
 /** One line of the vault's activity log. */
@@ -145,7 +168,10 @@ export interface VaultEvent {
     | "deleted"
     | "imported"
     | "ask_on"
-    | "ask_off";
+    | "ask_off"
+    | "code_saved"
+    | "code_removed"
+    | "code_used";
   site: string | null;
   account: string | null;
   detail: string | null;
@@ -241,6 +267,17 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     updateVaultLogin: (id: string, input: { askBeforeUse: boolean }) =>
       call<{ ok: true }>("PATCH", `/vault/logins/${id}`, input),
     deleteVaultLogin: (id: string) => call<{ ok: true }>("DELETE", `/vault/logins/${id}`),
+    /** Saves the site's authenticator key (setup key or otpauth:// link) with the login. */
+    saveVaultCodeKey: (id: string, key: string) =>
+      call<{ ok: true }>("POST", `/vault/logins/${id}/code-key`, { key }),
+    removeVaultCodeKey: (id: string) =>
+      call<{ ok: true }>("DELETE", `/vault/logins/${id}/code-key`),
+    /** Reads a password manager's export file; nothing is saved yet. */
+    previewVaultImport: (csv: string) =>
+      call<ImportPreview>("POST", "/vault/import/preview", { csv }),
+    /** Saves the ticked logins (by index) from the export file. */
+    importVault: (input: { csv: string; manager: PasswordManager; indices: number[] }) =>
+      call<{ imported: number; replaced: number }>("POST", "/vault/import", input),
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
     /** Shows an image file in the page (browser pictures). */
     fileViewUrl: (id: string) => `${baseUrl}/files/${id}/view`,

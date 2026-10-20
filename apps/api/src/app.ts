@@ -11,6 +11,7 @@ import {
 import { handBack, signIn, takeOver, viewOf } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
+import { BadRequest } from "./errors.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
 import { extractText } from "./extract.js";
 import {
@@ -31,7 +32,17 @@ import {
 import type { Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila } from "./travila.js";
-import { deleteLogin, listLogins, setAskBeforeUse, vaultActivity, vaultKeyFrom } from "./vault.js";
+import {
+  deleteLogin,
+  existingLogins,
+  importLogins,
+  listLogins,
+  setAskBeforeUse,
+  setCodeKey,
+  vaultActivity,
+  vaultKeyFrom,
+} from "./vault.js";
+import { MANAGERS, readExport } from "./vault-import.js";
 
 const COOKIE = "aia_session";
 const SESSION_DAYS = 30;
@@ -508,6 +519,121 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!(await deleteLogin(sql, s.userId, req.params.id))) throw new NotFound("saved login");
     return { ok: true };
   });
+
+  // A login's authenticator key, for 2-step codes. Write-only: it is never sent back.
+  app.post<{ Params: { id: string }; Body: { key: string } }>(
+    "/vault/logins/:id/code-key",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["key"],
+          properties: { key: { type: "string", minLength: 1, maxLength: 1000 } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+      let ok;
+      try {
+        ok = await setCodeKey(sql, vaultKey, s.userId, req.params.id, req.body.key);
+      } catch (err) {
+        throw new BadRequest((err as Error).message);
+      }
+      if (!ok) throw new NotFound("saved login");
+      reply.header("Cache-Control", "no-store");
+      return { ok: true };
+    },
+  );
+
+  app.delete<{ Params: { id: string } }>("/vault/logins/:id/code-key", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+    if (!(await setCodeKey(sql, vaultKey, s.userId, req.params.id, null))) {
+      throw new NotFound("saved login");
+    }
+    return { ok: true };
+  });
+
+  // Import from a password manager's export file. The file holds passwords: it is read in
+  // memory, never stored or logged, and only the ticked logins go into the vault.
+  const IMPORT_LIMIT = 8 * 1024 * 1024;
+  const readOrRefuse = (csv: string) => {
+    try {
+      return readExport(csv);
+    } catch (err) {
+      throw new BadRequest((err as Error).message);
+    }
+  };
+
+  app.post<{ Body: { csv: string } }>(
+    "/vault/import/preview",
+    {
+      bodyLimit: IMPORT_LIMIT,
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["csv"],
+          properties: { csv: { type: "string", maxLength: IMPORT_LIMIT } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      const { logins, skipped } = readOrRefuse(req.body.csv);
+      const saved = await existingLogins(sql, s.userId);
+      reply.header("Cache-Control", "no-store");
+      return {
+        logins: logins.map((l) => ({
+          index: l.index,
+          site: l.site,
+          account: l.username,
+          alreadySaved: saved.has(`${l.site}\n${l.username}`),
+        })),
+        skipped: skipped.length,
+      };
+    },
+  );
+
+  app.post<{ Body: { csv: string; manager: string; indices: number[] } }>(
+    "/vault/import",
+    {
+      bodyLimit: IMPORT_LIMIT,
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["csv", "manager", "indices"],
+          properties: {
+            csv: { type: "string", maxLength: IMPORT_LIMIT },
+            manager: { type: "string", enum: [...MANAGERS] },
+            indices: { type: "array", items: { type: "integer", minimum: 0 }, maxItems: 5000 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      const picked = new Set(req.body.indices);
+      const { logins } = readOrRefuse(req.body.csv);
+      const result = await importLogins(
+        sql,
+        vaultKey,
+        s.userId,
+        req.body.manager,
+        logins.filter((l) => picked.has(l.index)),
+      );
+      reply.header("Cache-Control", "no-store");
+      return result;
+    },
+  );
 
   return app;
 }

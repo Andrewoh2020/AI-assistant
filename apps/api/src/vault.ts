@@ -8,6 +8,7 @@ import {
 } from "node:crypto";
 import { withVault, type AuditEventRow, type Sql, type TransactionSql } from "@ai-assistant/db";
 import type { VaultEvent, VaultLogin } from "@ai-assistant/api-client";
+import { parseTotpKey, totp, type TotpKey } from "./totp.js";
 
 /**
  * The vault service: the only code that can open saved logins. The rest of the app, and so the
@@ -41,7 +42,7 @@ export function vaultKeyFrom(masterKey: string, sessionSecret: string): VaultKey
 /** A saved login as everyone outside the vault sees it: no username or password. */
 export type SavedLogin = Pick<
   VaultLogin,
-  "id" | "site" | "account" | "askBeforeUse" | "lastResult"
+  "id" | "site" | "account" | "askBeforeUse" | "lastResult" | "hasCodeKey"
 >;
 
 interface CredentialRow {
@@ -53,6 +54,7 @@ interface CredentialRow {
   key_id: string;
   ask_before_use: boolean;
   last_result: "worked" | "rejected" | null;
+  sealed_otp: Buffer | null;
 }
 
 const summary = (r: CredentialRow): SavedLogin => ({
@@ -61,6 +63,7 @@ const summary = (r: CredentialRow): SavedLogin => ({
   account: r.account,
   askBeforeUse: r.ask_before_use,
   lastResult: r.last_result,
+  hasCodeKey: !!r.sealed_otp,
 });
 
 // The sealed data is tied to its owner, row and site, so it can't be moved to another row or site.
@@ -81,11 +84,19 @@ function decrypt(key: Buffer, aad: string, sealed: Buffer): Buffer {
   return Buffer.concat([decipher.update(sealed.subarray(28)), decipher.final()]);
 }
 
-function seal(vk: VaultKey, aad: string, login: { username: string; password: string }) {
+function seal(
+  vk: VaultKey,
+  aad: string,
+  login: { username: string; password: string },
+  codeKey: TotpKey | null = null,
+) {
   const dataKey = randomBytes(32);
   try {
     return {
       sealed: encrypt(dataKey, aad, Buffer.from(JSON.stringify(login))),
+      sealed_otp: codeKey
+        ? encrypt(dataKey, `${aad}:otp`, Buffer.from(JSON.stringify(codeKey)))
+        : null,
       wrapped_key: encrypt(vk.key, `wrap:${aad}`, dataKey),
       key_id: vk.id,
     };
@@ -94,15 +105,13 @@ function seal(vk: VaultKey, aad: string, login: { username: string; password: st
   }
 }
 
-function unseal(vk: VaultKey, aad: string, row: CredentialRow) {
+/** Opens the login's own key for `use`, then forgets it. Null if it can't be opened. */
+function withDataKey<T>(vk: VaultKey, aad: string, row: CredentialRow, use: (key: Buffer) => T) {
   if (row.key_id !== vk.id) return null;
   try {
     const dataKey = decrypt(vk.key, `wrap:${aad}`, row.wrapped_key);
     try {
-      return JSON.parse(decrypt(dataKey, aad, row.sealed).toString("utf8")) as {
-        username: string;
-        password: string;
-      };
+      return use(dataKey);
     } finally {
       dataKey.fill(0);
     }
@@ -111,12 +120,22 @@ function unseal(vk: VaultKey, aad: string, row: CredentialRow) {
   }
 }
 
+function unseal(vk: VaultKey, aad: string, row: CredentialRow) {
+  return withDataKey(vk, aad, row, (key) => {
+    const login = JSON.parse(decrypt(key, aad, row.sealed).toString("utf8")) as {
+      username: string;
+      password: string;
+    };
+    return login;
+  });
+}
+
 async function audit(
   tx: TransactionSql,
   userId: string,
   action: AuditEventRow["action"],
-  site: string,
-  account: string,
+  site: string | null,
+  account: string | null,
   browserSessionId: string | null,
   detail: string | null = null,
 ) {
@@ -312,4 +331,162 @@ export async function vaultActivity(sql: Sql, userId: string, limit = 50): Promi
     detail: r.detail,
     at: r.created_at.toISOString(),
   }));
+}
+
+/**
+ * Saves logins from a password manager's export file. `logins` are the rows the person ticked;
+ * a login already saved for the same site and account is replaced only if it was ticked too.
+ */
+export async function importLogins(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  manager: string,
+  logins: {
+    site: string;
+    username: string;
+    password: string;
+    loginPath: string | null;
+    otp: string | null;
+  }[],
+): Promise<{ imported: number; replaced: number }> {
+  return withVault(sql, userId, async (tx) => {
+    const [batch] = await tx<{ id: string }[]>`
+      INSERT INTO vault.import_batches (user_id, manager) VALUES (${userId}, ${manager})
+      RETURNING id`;
+    let imported = 0;
+    let replaced = 0;
+    for (const l of logins) {
+      const [existing] = await tx<{ id: string }[]>`
+        SELECT id FROM vault.credentials WHERE site = ${l.site} AND account = ${l.username}`;
+      const id = existing?.id ?? randomUUID();
+      const sealed = seal(
+        vk,
+        context(userId, id, l.site),
+        { username: l.username, password: l.password },
+        l.otp ? parseTotpKey(l.otp) : null,
+      );
+      if (existing) {
+        await tx`
+          UPDATE vault.credentials SET login_path = ${l.loginPath}, sealed = ${sealed.sealed},
+            sealed_otp = ${sealed.sealed_otp},
+            wrapped_key = ${sealed.wrapped_key}, key_id = ${sealed.key_id}, source = 'imported',
+            import_batch_id = ${batch!.id}, last_result = NULL, last_result_at = NULL,
+            updated_at = now()
+          WHERE id = ${id}`;
+        replaced++;
+      } else {
+        await tx`
+          INSERT INTO vault.credentials (id, user_id, site, account, login_path, sealed, sealed_otp,
+                                         wrapped_key, key_id, source, import_batch_id)
+          VALUES (${id}, ${userId}, ${l.site}, ${l.username}, ${l.loginPath}, ${sealed.sealed},
+                  ${sealed.sealed_otp}, ${sealed.wrapped_key}, ${sealed.key_id}, 'imported',
+                  ${batch!.id})`;
+        imported++;
+      }
+    }
+    await tx`UPDATE vault.import_batches SET imported = ${imported + replaced},
+               skipped = 0 WHERE id = ${batch!.id}`;
+    const n = imported + replaced;
+    await audit(
+      tx,
+      userId,
+      "imported",
+      null,
+      null,
+      null,
+      `Imported ${n} login${n === 1 ? "" : "s"} from ${manager}`,
+    );
+    return { imported, replaced };
+  });
+}
+
+/** Which of these site and account pairs already have a saved login. */
+export async function existingLogins(sql: Sql, userId: string): Promise<Set<string>> {
+  const rows = await withVault(
+    sql,
+    userId,
+    (tx) => tx<{ site: string; account: string }[]>`SELECT site, account FROM vault.credentials`,
+  );
+  return new Set(rows.map((r) => `${r.site}\n${r.account}`));
+}
+
+// 2-step codes (V4). The authenticator key is sealed with the login's own key and never leaves
+// the vault; only a code made from it does, for one run on the login's own site.
+
+/** The saved login a sign-in used, as outsiders see it. */
+export async function loginSummary(
+  sql: Sql,
+  userId: string,
+  id: string,
+): Promise<SavedLogin | null> {
+  const [row] = await withVault(
+    sql,
+    userId,
+    (tx) => tx<CredentialRow[]>`SELECT * FROM vault.credentials WHERE id = ${id}`,
+  );
+  return row ? summary(row) : null;
+}
+
+/**
+ * Saves (or, with null, removes) a login's authenticator key. Returns false when the login isn't
+ * there; throws when the text isn't an authenticator key.
+ */
+export async function setCodeKey(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  id: string,
+  raw: string | null,
+): Promise<boolean> {
+  const codeKey = raw === null ? null : parseTotpKey(raw);
+  if (raw !== null && !codeKey) {
+    throw new Error("That isn't an authenticator key. Paste the setup key or the otpauth:// link.");
+  }
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`
+      SELECT * FROM vault.credentials WHERE id = ${id} FOR UPDATE`;
+    if (!row) return false;
+    const aad = context(userId, row.id, row.site);
+    const sealedOtp = codeKey
+      ? withDataKey(vk, aad, row, (key) =>
+          encrypt(key, `${aad}:otp`, Buffer.from(JSON.stringify(codeKey))),
+        )
+      : null;
+    if (codeKey && !sealedOtp) throw new Error("This saved login can't be opened. Save it again.");
+    await tx`UPDATE vault.credentials SET sealed_otp = ${sealedOtp}, updated_at = now()
+             WHERE id = ${id}`;
+    await audit(tx, userId, codeKey ? "code_saved" : "code_removed", row.site, row.account, null);
+    return true;
+  });
+}
+
+/** How far ahead the code is made: a run takes a while to start typing it. */
+const CODE_LEAD_MS = 25 * 1000;
+
+/** A 2-step code from the login's saved key, for one run on its own site. */
+export async function codeForRun(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  id: string,
+  site: string,
+  browserSessionId: string,
+  now = new Date(),
+): Promise<string | null> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`
+      SELECT * FROM vault.credentials WHERE id = ${id} AND site = ${site}`;
+    if (!row?.sealed_otp) return null;
+    const aad = context(userId, row.id, row.site);
+    const code = withDataKey(vk, aad, row, (key) => {
+      const codeKey = JSON.parse(
+        decrypt(key, `${aad}:otp`, row.sealed_otp!).toString("utf8"),
+      ) as TotpKey;
+      return totp(codeKey, new Date(now.getTime() + CODE_LEAD_MS));
+    });
+    if (!code) return null;
+    await audit(tx, userId, "code_used", row.site, row.account, browserSessionId);
+    return code;
+  });
 }

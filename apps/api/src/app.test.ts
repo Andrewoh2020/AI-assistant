@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { withUser, type Sql } from "@ai-assistant/db";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
+import { parseTotpKey, totp } from "./totp.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 
 let sql: Sql | null = null;
@@ -1170,6 +1171,146 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       const next = await browseTask(cookie, { result: "NEEDS_SIGN_IN: Please sign in." });
       const again = await pollUntil(cookie, next, (r) => r.browsers[0]?.ask);
       expect(again.browsers[0].ask).toMatchObject({ problem: null, savedAccount: null });
+    });
+
+    it("imports logins from a password manager's export file", async () => {
+      const cookie = await signUp();
+      const userId = await userOf(cookie);
+      const csv = [
+        "name,url,username,password,note",
+        "Example,https://www.example.com/login,me@example.com,Imported-Pw-5521,",
+        "Other,https://other.example.org,someone,Other-Pw-9,",
+        "Note,,,,just a note",
+      ].join("\n");
+      const post = (url: string, payload: unknown) =>
+        app.inject({ method: "POST", url, headers: { cookie }, payload: payload as object });
+      const preview = await post("/vault/import/preview", { csv });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.body).not.toContain("Imported-Pw");
+      expect(preview.json()).toEqual({
+        logins: [
+          { index: 0, site: "example.com", account: "me@example.com", alreadySaved: false },
+          { index: 1, site: "other.example.org", account: "someone", alreadySaved: false },
+        ],
+        skipped: 1,
+      });
+      expect((await post("/vault/import/preview", { csv: "a,b\n1,2" })).statusCode).toBe(400);
+
+      // Only the ticked rows come in.
+      const done = await post("/vault/import", { csv, manager: "Chrome", indices: [0] });
+      expect(done.json()).toEqual({ imported: 1, replaced: 0 });
+      const page = (await app.inject({ method: "GET", url: "/vault", headers: { cookie } })).json();
+      expect(page.logins).toMatchObject([
+        {
+          site: "example.com",
+          account: "me@example.com",
+          source: "imported",
+          importedFrom: "Chrome",
+        },
+      ]);
+      expect(page.activity[0]).toMatchObject({
+        action: "imported",
+        detail: "Imported 1 login from Chrome",
+      });
+      const again = await post("/vault/import/preview", { csv });
+      expect(again.json().logins[0].alreadySaved).toBe(true);
+
+      // The imported login fills in by itself.
+      const run = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      await pollUntilDone(cookie, run);
+      expect(lastRun().input.secrets?.find((b) => b.alias === "login_password")?.value).toBe(
+        "Imported-Pw-5521",
+      );
+      // The file itself was never kept.
+      for (const t of ["files", "messages", "browser_sessions", "audit_events"]) {
+        const [hit] = await sql!<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM ${sql!(t)} r WHERE user_id = ${userId}
+            AND row_to_json(r)::text LIKE '%Pw-%'`;
+        expect(hit!.n, t).toBe(0);
+      }
+    });
+
+    it("makes 2-step codes from a saved authenticator key, and asks when one is turned down", async () => {
+      const cookie = await signUp();
+      const userId = await userOf(cookie);
+      const KEY = "JBSWY3DPEHPK3PXPJBSWY3DP";
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "me", password: PASSWORD });
+      await pollUntilDone(cookie, first);
+      const [{ id }] = (
+        await app.inject({ method: "GET", url: "/vault", headers: { cookie } })
+      ).json().logins;
+      const setKey = (key: string) =>
+        app.inject({
+          method: "POST",
+          url: `/vault/logins/${id}/code-key`,
+          headers: { cookie },
+          payload: { key },
+        });
+      expect((await setKey("not a key")).statusCode).toBe(400);
+      const saved = await setKey(`otpauth://totp/Example:me?secret=${KEY}&issuer=Example`);
+      expect(saved.statusCode).toBe(200);
+      expect(saved.body).not.toContain(KEY);
+      const page = await app.inject({ method: "GET", url: "/vault", headers: { cookie } });
+      expect(page.body).not.toContain(KEY);
+      expect(page.json().logins[0].hasCodeKey).toBe(true);
+
+      // Sign-in page, then a code page: both filled from the vault, nobody asked.
+      const second = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "NEEDS_CODE: Enter the code from your authenticator app." },
+        { result: "Signed in. 3 unread." },
+      );
+      const before = Date.now();
+      const run = await pollUntilDone(cookie, second);
+      expect(run.message.browsers[0].note).toBe(
+        "Signed in to example.com with your saved login and 2-step code",
+      );
+      const sent = lastRun().input.secrets!;
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ alias: "login_code", allowedDomains: ["example.com"] });
+      // The code for about 25 seconds ahead, when the browser gets to typing it.
+      const k = parseTotpKey(KEY)!;
+      const near = [0, 25, 30, 55].map((s) => totp(k, new Date(before + s * 1000)));
+      expect(near).toContain(sent[0]!.value);
+      expect(lastRun().input.task).not.toContain(sent[0]!.value);
+
+      // A code the site turns down: the box asks for the code from the app.
+      const third = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "NEEDS_CODE: Enter the code." },
+        { result: "NEEDS_CODE: That code didn't work." },
+      );
+      const box = await pollUntil(cookie, third, (r) => r.browsers[0]?.ask?.kind === "code");
+      expect(box.browsers[0].ask).toMatchObject({ kind: "code", problem: "saved_code_rejected" });
+
+      // Removing the key: back to asking for codes.
+      expect(
+        (
+          await app.inject({
+            method: "DELETE",
+            url: `/vault/logins/${id}/code-key`,
+            headers: { cookie },
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(await actions(userId)).toEqual(
+        expect.arrayContaining(["code_saved", "code_used", "code_removed"]),
+      );
+      const [hit] = await sql!<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM vault.credentials r WHERE row_to_json(r)::text LIKE ${"%" + KEY + "%"}`;
+      expect(hit!.n).toBe(0);
     });
   });
 
