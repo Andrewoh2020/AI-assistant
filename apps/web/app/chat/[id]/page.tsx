@@ -1,6 +1,4 @@
-import { AppShell } from "@/components/AppShell";
-
-export default async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  return <AppShell chatId={id} />;
+/** The chat itself is drawn by the layout (app/chat/layout.tsx), which reads the id. */
+export default function ChatPage() {
+  return null;
 }

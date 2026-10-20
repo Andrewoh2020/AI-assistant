@@ -15,7 +15,7 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   });
   const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.text();
   const res = await app.inject({
-    method: req.method as "GET" | "POST" | "PATCH",
+    method: req.method as "GET" | "POST" | "PATCH" | "DELETE",
     url: "/" + path.map(encodeURIComponent).join("/") + req.nextUrl.search,
     headers,
     payload: body,
@@ -28,4 +28,4 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   return new Response(new Uint8Array(res.rawPayload), { status: res.statusCode, headers: out });
 }
 
-export { handle as GET, handle as POST, handle as PATCH };
+export { handle as GET, handle as POST, handle as PATCH, handle as DELETE };

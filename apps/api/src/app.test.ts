@@ -357,4 +357,91 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect((await patch(b, id, { archived: true })).statusCode).toBe(403);
     expect((await patch(a, await mainChatId(a), { archived: true })).statusCode).toBe(409);
   });
+
+  it("names a side chat from its first message, and lets the owner rename it", async () => {
+    const a = await signUp();
+    const b = await signUp();
+    const id = (
+      await app.inject({ method: "POST", url: "/chats", headers: { cookie: a }, payload: {} })
+    ).json().chat.id;
+    await ask(
+      a,
+      id,
+      "Plan a long weekend trip to Washington with museums and good food\nWe like walking",
+    );
+    const listed = () =>
+      app
+        .inject({ method: "GET", url: "/chats", headers: { cookie: a } })
+        .then((r) => r.json().chats.find((c: { id: string }) => c.id === id));
+    expect((await listed()).title).toBe("Plan a long weekend trip to Washington with…");
+
+    const rename = (cookie: string, chatId: string, title: unknown) =>
+      app.inject({
+        method: "PATCH",
+        url: `/chats/${chatId}`,
+        headers: { cookie },
+        payload: { title },
+      });
+    expect((await rename(a, id, "  Trip to   Washington ")).json().chat.title).toBe(
+      "Trip to Washington",
+    );
+    expect((await listed()).title).toBe("Trip to Washington");
+    expect((await rename(a, id, "   ")).statusCode).toBe(400);
+    expect((await rename(a, id, "x".repeat(121))).statusCode).toBe(400);
+    expect((await rename(b, id, "Mine now")).statusCode).toBe(403);
+    expect((await rename(a, await mainChatId(a), "Renamed")).statusCode).toBe(409);
+  });
+
+  it("keeps each chat's history separate, and lists the busy chat with its reply in progress", async () => {
+    const cookie = await signUp();
+    const main = await mainChatId(cookie);
+    const side = (
+      await app.inject({ method: "POST", url: "/chats", headers: { cookie }, payload: {} })
+    ).json().chat.id;
+    travila.scripts.push([{ answer: "main answer" }]);
+    const mainRun = (await ask(cookie, main, "main question")).json().run.id;
+    await pollUntilDone(cookie, mainRun);
+    travila.scripts.push([{ tools: [{ name: "web_search", args: { query: "slow" } }] }]);
+    const sideRun = (await ask(cookie, side, "side question")).json().run.id;
+
+    const view = async (id: string) =>
+      (await app.inject({ method: "GET", url: `/chats/${id}`, headers: { cookie } })).json();
+    const texts = (v: { messages: { text: string }[] }) => v.messages.map((m) => m.text);
+    expect(texts(await view(main))).toEqual(["main question", "main answer"]);
+    expect(texts(await view(side))).toEqual(["side question"]);
+    expect(new Set(travila.threads.keys()).size).toBe(2);
+
+    const chats = (await app.inject({ method: "GET", url: "/chats", headers: { cookie } })).json()
+      .chats as { id: string; activeRunId: string | null }[];
+    expect(chats.find((c) => c.id === side)!.activeRunId).toBe(sideRun);
+    expect(chats.find((c) => c.id === main)!.activeRunId).toBeNull();
+    // Most recently used side chat is listed right after Main.
+    expect(chats[0]!.id).toBe(main);
+    expect(chats[1]!.id).toBe(side);
+  });
+
+  it("deletes a side chat and everything in it, never Main, and only the owner's", async () => {
+    const a = await signUp();
+    const b = await signUp();
+    const id = (
+      await app.inject({ method: "POST", url: "/chats", headers: { cookie: a }, payload: {} })
+    ).json().chat.id;
+    travila.scripts.push([{ answer: "an answer" }]);
+    await pollUntilDone(a, (await ask(a, id, "a question")).json().run.id);
+
+    const del = (cookie: string, chatId: string) =>
+      app.inject({ method: "DELETE", url: `/chats/${chatId}`, headers: { cookie } });
+    expect((await del(b, id)).statusCode).toBe(403);
+    expect((await del(a, await mainChatId(a))).statusCode).toBe(409);
+    expect((await del(a, id)).statusCode).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: `/chats/${id}`, headers: { cookie: a } })).statusCode,
+    ).toBe(403);
+    const left = (await app.inject({ method: "GET", url: "/chats", headers: { cookie: a } })).json()
+      .chats as { id: string }[];
+    expect(left.some((c) => c.id === id)).toBe(false);
+    const [{ count }] = await sql!<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM messages WHERE chat_id = ${id}`;
+    expect(count).toBe(0);
+  });
 });

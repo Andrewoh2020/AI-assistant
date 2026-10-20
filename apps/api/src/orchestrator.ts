@@ -167,38 +167,77 @@ async function updateRun(
   return row;
 }
 
-/** Creates the user's Main chat on first use, and returns all their open chats. */
-export async function listChats(sql: Sql, s: Session): Promise<ChatRow[]> {
+export type ChatListRow = ChatRow & { last_active_at: Date; active_run_id: string | null };
+
+/**
+ * Creates the user's Main chat on first use, and returns all their chats: Main first, then pinned,
+ * then the most recently used. "Recently used" is the last message, so renaming or pinning a chat
+ * doesn't move it. Each chat says which reply, if any, is still being worked on.
+ */
+export async function listChats(sql: Sql, s: Session): Promise<ChatListRow[]> {
   return withUser(sql, s.userId, async (tx) => {
     await tx`INSERT INTO chats (user_id, kind, title) VALUES (${s.userId}, 'main', 'Main')
              ON CONFLICT (user_id) WHERE kind = 'main' DO NOTHING`;
     // Archived chats are included; the website shows them only when asked to.
-    return tx<ChatRow[]>`SELECT * FROM chats
-                         ORDER BY (kind = 'main') DESC, pinned DESC, updated_at DESC`;
+    return tx<ChatListRow[]>`
+      SELECT c.*,
+        coalesce((SELECT max(m.created_at) FROM messages m WHERE m.chat_id = c.id), c.created_at)
+          AS last_active_at,
+        (SELECT r.id FROM runs r WHERE r.chat_id = c.id
+           AND r.status NOT IN ('completed', 'failed', 'cancelled')
+           ORDER BY r.created_at DESC LIMIT 1) AS active_run_id
+      FROM chats c
+      ORDER BY (c.kind = 'main') DESC, c.pinned DESC, last_active_at DESC, c.created_at DESC`;
   });
 }
 
-/** Pins or archives a side chat. Main can't be archived. */
+/** Pins, archives or renames a side chat. Main can't be changed. */
 export async function updateChat(
   sql: Sql,
   s: Session,
   chatId: string,
-  input: { pinned?: boolean; archived?: boolean },
+  input: { pinned?: boolean; archived?: boolean; title?: string },
 ): Promise<ChatRow> {
   return withUser(sql, s.userId, async (tx) => {
     const [chat] = await tx<ChatRow[]>`SELECT * FROM chats WHERE id = ${chatId}`;
     if (!chat) throw new NotFound();
-    if (chat.kind === "main" && (input.archived || input.pinned !== undefined)) {
-      throw new Conflict("Main chat can't be pinned or archived.");
+    if (
+      chat.kind === "main" &&
+      (input.archived || input.pinned !== undefined || input.title !== undefined)
+    ) {
+      throw new Conflict("Main chat can't be renamed, pinned or archived.");
     }
     const pinned = input.pinned ?? chat.pinned;
     const archived = input.archived === undefined ? chat.archived_at !== null : input.archived;
+    const title = input.title === undefined ? chat.title : input.title;
     const [updated] = await tx<ChatRow[]>`
-      UPDATE chats SET pinned = ${pinned},
+      UPDATE chats SET pinned = ${pinned}, title = ${title},
         archived_at = CASE WHEN ${archived}::boolean THEN coalesce(archived_at, now()) ELSE NULL END
       WHERE id = ${chatId} RETURNING *`;
     return updated!;
   });
+}
+
+/** Deletes a side chat with everything in it. Main can't be deleted. */
+export async function deleteChat(sql: Sql, s: Session, chatId: string): Promise<void> {
+  await withUser(sql, s.userId, async (tx) => {
+    const [chat] = await tx<ChatRow[]>`SELECT * FROM chats WHERE id = ${chatId}`;
+    if (!chat) throw new NotFound();
+    if (chat.kind === "main") throw new Conflict("Main chat can't be deleted.");
+    await tx`DELETE FROM chats WHERE id = ${chatId}`;
+  });
+}
+
+/**
+ * Names a side chat after its first message: the first line, cut at a word break so it fits the
+ * sidebar. The user can rename it any time.
+ */
+export function titleFrom(text: string, max = 48): string {
+  const line = text.trim().split(/\r?\n/)[0]!.replace(/\s+/g, " ").trim();
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max + 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max / 2 ? cut.slice(0, space) : line.slice(0, max)).replace(/[\s,.;:!?-]+$/, "")}…`;
 }
 
 export async function createSideChat(
@@ -273,7 +312,7 @@ export async function sendMessage(
               ${tx.json([{ type: "text", text: input.text }] as never)}, ${run!.id}, ${input.clientMessageId})
       RETURNING *`;
     if (chat.kind === "side" && !chat.title) {
-      await tx`UPDATE chats SET title = ${input.text.slice(0, 60)} WHERE id = ${chatId}`;
+      await tx`UPDATE chats SET title = ${titleFrom(input.text)} WHERE id = ${chatId}`;
     } else {
       await tx`UPDATE chats SET updated_at = now() WHERE id = ${chatId}`;
     }
@@ -295,7 +334,7 @@ export async function sendMessage(
     let threadId = chat.travila_thread_id;
     if (!threadId) {
       threadId = await travila.createThread(s.travilaUserId, {
-        title: chat.kind === "main" ? "Main" : (chat.title ?? input.text.slice(0, 60)),
+        title: chat.kind === "main" ? "Main" : (chat.title ?? titleFrom(input.text)),
         systemPrompt: MAIN_INSTRUCTIONS,
         models: MODELS,
         reasoningEffort: REASONING_EFFORT,

@@ -43,7 +43,10 @@ export interface ChatSummary {
   cleanRoom: boolean;
   pinned: boolean;
   archived: boolean;
+  /** When the chat last had a message (or was created, if it has none). */
   updatedAt: string;
+  /** The reply still being worked on in this chat, if any. Only set in the chat list. */
+  activeRunId: string | null;
 }
 
 export interface Me {
@@ -96,8 +99,9 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     listChats: () => call<{ chats: ChatSummary[] }>("GET", "/chats"),
     createSideChat: (input: { title?: string; cleanRoom?: boolean }) =>
       call<{ chat: ChatSummary }>("POST", "/chats", input),
-    updateChat: (id: string, input: { pinned?: boolean; archived?: boolean }) =>
+    updateChat: (id: string, input: { pinned?: boolean; archived?: boolean; title?: string }) =>
       call<{ chat: ChatSummary }>("PATCH", `/chats/${id}`, input),
+    deleteChat: (id: string) => call<{ ok: true }>("DELETE", `/chats/${id}`),
     getChat: (id: string) =>
       call<{
         chat: ChatSummary;

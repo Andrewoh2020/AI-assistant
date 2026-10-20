@@ -17,6 +17,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { api } from "@/lib/client";
 import { usePref } from "@/lib/prefs";
@@ -24,6 +25,14 @@ import { Answer } from "./Answer";
 import { Menu, MenuItem } from "./Menu";
 
 const POLL_MS = 1500;
+/** Replies in chats you aren't looking at keep going too, checked a little less often. */
+const BACKGROUND_POLL_MS = 3000;
+
+type ChatChange = { pinned?: boolean; archived?: boolean; title?: string };
+
+// Each chat keeps its own unsent message while you switch between chats. Kept outside the
+// component so it survives moving from one chat page to another.
+const drafts = new Map<string, string>();
 
 export function AppShell({ chatId }: { chatId: string }) {
   const router = useRouter();
@@ -36,6 +45,10 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Chats whose reply finished while you were looking at another chat.
+  const [unread, setUnread] = useState<ReadonlySet<string>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [navOpen, setNavOpen] = useState(false);
   // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's menu
   // button opens it over the chat and it closes after you pick one.
@@ -79,6 +92,38 @@ export function AppShell({ chatId }: { chatId: string }) {
     [router],
   );
 
+  const refreshChats = useCallback(async () => {
+    try {
+      setChats((await api.listChats()).chats);
+    } catch (err) {
+      handleAuth(err);
+    }
+  }, [handleAuth]);
+
+  // Switching chats: clear what was on screen, bring back this chat's unsent message, and mark
+  // its new reply as seen.
+  useEffect(() => {
+    setChat(null);
+    setMessages([]);
+    setEndedRuns([]);
+    setActiveRun(null);
+    setSendError(null);
+    setSelected(null);
+    setDraft(drafts.get(chatId) ?? "");
+    setUnread((prev) => {
+      if (!prev.has(chatId)) return prev;
+      const next = new Set(prev);
+      next.delete(chatId);
+      return next;
+    });
+  }, [chatId]);
+
+  function changeDraft(text: string) {
+    setDraft(text);
+    if (text) drafts.set(chatId, text);
+    else drafts.delete(chatId);
+  }
+
   // Load the user, the chat list and this chat (including a reply still in progress).
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +141,8 @@ export function AppShell({ chatId }: { chatId: string }) {
           .reverse()
           .find((m) => m.role === "assistant" && m.sources.length);
         setSelected(lastAnswer ? { messageId: lastAnswer.id, n: null } : null);
+        // A brand-new chat is ready to type in.
+        if (data.messages.length === 0 && !data.activeRun) inputRef.current?.focus();
       })
       .catch((err) => {
         if (!cancelled && !handleAuth(err))
@@ -128,6 +175,7 @@ export function AppShell({ chatId }: { chatId: string }) {
             setEndedRuns((prev) => [...prev.filter((r) => r.id !== run.id), run]);
           }
           setActiveRun(null);
+          void refreshChats();
           return;
         }
       } catch (err) {
@@ -141,7 +189,47 @@ export function AppShell({ chatId }: { chatId: string }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [activeRunId, handleAuth]);
+  }, [activeRunId, handleAuth, refreshChats]);
+
+  // Replies still being worked on in other chats. Polling moves them forward on the server, so a
+  // side chat keeps answering while you read Main, and the chat list shows when it's done.
+  const backgroundRuns = chats
+    .filter((c) => c.id !== chatId && c.activeRunId)
+    .map((c) => `${c.id}:${c.activeRunId}`)
+    .join(",");
+  useEffect(() => {
+    if (!backgroundRuns) return;
+    const pairs = backgroundRuns.split(",").map((p) => p.split(":") as [string, string]);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      const finished: string[] = [];
+      await Promise.all(
+        pairs.map(async ([id, runId]) => {
+          try {
+            const { run } = await api.pollRun(runId);
+            if (TERMINAL_STATUSES.has(run.status)) finished.push(id);
+          } catch (err) {
+            // A deleted chat's run is gone; the next chat list drops it.
+            if (err instanceof ApiError && err.status === 403) finished.push(id);
+            else handleAuth(err);
+          }
+        }),
+      );
+      if (stopped) return;
+      if (finished.length) {
+        setUnread((prev) => new Set([...prev, ...finished]));
+        await refreshChats();
+        return;
+      }
+      timer = setTimeout(tick, BACKGROUND_POLL_MS);
+    };
+    timer = setTimeout(tick, BACKGROUND_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [backgroundRuns, handleAuth, refreshChats]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -154,10 +242,17 @@ export function AppShell({ chatId }: { chatId: string }) {
     const clientMessageId = crypto.randomUUID();
     try {
       const res = await api.sendMessage(chatId, { text: trimmed, clientMessageId });
-      setDraft("");
+      changeDraft("");
       setMessages((prev) => [...prev, res.message]);
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === chatId ? { ...c, activeRunId: res.run.id, title: c.title ?? trimmed } : c,
+        ),
+      );
       if (TERMINAL_STATUSES.has(res.run.status)) setEndedRuns((prev) => [...prev, res.run]);
       else setActiveRun(res.run);
+      // The first message names a new side chat and moves it to the top of the list.
+      void refreshChats();
     } catch (err) {
       if (!handleAuth(err)) setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -174,24 +269,57 @@ export function AppShell({ chatId }: { chatId: string }) {
     }
   }
 
+  // Opens a fresh side chat. A side chat you opened but never wrote in is reused, so clicking
+  // "+" twice doesn't leave empty chats behind.
   async function newSideChat() {
+    picked();
+    const unused = chats.find((c) => c.kind === "side" && !c.title && !c.archived);
+    if (unused) {
+      if (unused.id === chatId) inputRef.current?.focus();
+      else router.push(`/chat/${unused.id}`);
+      return;
+    }
     try {
       const { chat: created } = await api.createSideChat({});
-      setChats((prev) => [prev[0]!, created, ...prev.slice(1)].filter(Boolean));
+      setChats((prev) => [
+        ...prev.filter((c) => c.kind === "main"),
+        created,
+        ...prev.filter((c) => c.kind !== "main"),
+      ]);
       router.push(`/chat/${created.id}`);
     } catch (err) {
       handleAuth(err);
     }
   }
 
-  async function updateChat(id: string, change: { pinned?: boolean; archived?: boolean }) {
+  async function updateChat(id: string, change: ChatChange) {
     try {
       const { chat: updated } = await api.updateChat(id, change);
-      const { chats: list } = await api.listChats();
-      setChats(list);
+      // Show the change at once; the fresh list below puts it in the right place.
+      setChats((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, ...updated, activeRunId: c.activeRunId } : c)),
+      );
       if (updated.id === chatId) setChat(updated);
+      await refreshChats();
     } catch (err) {
       handleAuth(err);
+    }
+  }
+
+  async function deleteChat(target: ChatSummary) {
+    setConfirmDelete(null);
+    try {
+      await api.deleteChat(target.id);
+      drafts.delete(target.id);
+      setChats((prev) => prev.filter((c) => c.id !== target.id));
+      if (target.id === chatId) {
+        const main = chats.find((c) => c.kind === "main");
+        router.replace(main ? `/chat/${main.id}` : "/");
+      }
+      await refreshChats();
+    } catch (err) {
+      if (!handleAuth(err))
+        setSendError(`Couldn't delete that chat: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -328,7 +456,12 @@ export function AppShell({ chatId }: { chatId: string }) {
           <ul className="chat-list">
             {mainChat && (
               <li>
-                <ChatLink chat={mainChat} current={chatId} onPick={picked} />
+                <ChatLink
+                  chat={mainChat}
+                  current={chatId}
+                  unread={unread.has(mainChat.id)}
+                  onPick={picked}
+                />
               </li>
             )}
           </ul>
@@ -347,7 +480,14 @@ export function AppShell({ chatId }: { chatId: string }) {
           <ul className="chat-list">
             {shownSideChats.map((c) => (
               <li key={c.id}>
-                <ChatLink chat={c} current={chatId} onPick={picked} onUpdate={updateChat} />
+                <ChatLink
+                  chat={c}
+                  current={chatId}
+                  unread={unread.has(c.id)}
+                  onPick={picked}
+                  onUpdate={updateChat}
+                  onDelete={setConfirmDelete}
+                />
               </li>
             ))}
             {q && shownSideChats.length === 0 && <li className="muted nav-empty">No matches</li>}
@@ -360,7 +500,14 @@ export function AppShell({ chatId }: { chatId: string }) {
               <ul className="chat-list">
                 {shownArchived.map((c) => (
                   <li key={c.id}>
-                    <ChatLink chat={c} current={chatId} onPick={picked} onUpdate={updateChat} />
+                    <ChatLink
+                      chat={c}
+                      current={chatId}
+                      unread={unread.has(c.id)}
+                      onPick={picked}
+                      onUpdate={updateChat}
+                      onDelete={setConfirmDelete}
+                    />
                   </li>
                 ))}
                 {shownArchived.length === 0 && (
@@ -396,8 +543,9 @@ export function AppShell({ chatId }: { chatId: string }) {
             <div className="empty">
               <h2>What would you like to know?</h2>
               <p>
-                Ask anything. For current topics I search the web and show where each fact came
-                from.
+                {chat.kind === "side"
+                  ? "This side chat keeps its own history, separate from Main chat. It's named after your first message."
+                  : "Ask anything. For current topics I search the web and show where each fact came from."}
               </p>
             </div>
           )}
@@ -463,8 +611,9 @@ export function AppShell({ chatId }: { chatId: string }) {
             </label>
             <textarea
               id="composer-input"
+              ref={inputRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => changeDraft(e.target.value)}
               onKeyDown={onKeyDown}
               placeholder="Message"
               rows={1}
@@ -487,24 +636,57 @@ export function AppShell({ chatId }: { chatId: string }) {
           </div>
         </form>
       </main>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete "${chatName(confirmDelete)}"?`}
+          confirmLabel="Delete"
+          onConfirm={() => deleteChat(confirmDelete)}
+          onCancel={() => setConfirmDelete(null)}
+        >
+          This deletes the side chat and all of its messages. It can&apos;t be undone.
+        </ConfirmDialog>
+      )}
     </div>
   );
+}
+
+function chatName(chat: ChatSummary) {
+  return chat.kind === "main" ? "Main chat" : chat.title || "New side chat";
 }
 
 function ChatLink({
   chat,
   current,
+  unread,
   onPick,
   onUpdate,
+  onDelete,
 }: {
   chat: ChatSummary;
   current: string;
+  unread: boolean;
   onPick: () => void;
-  onUpdate?: (id: string, change: { pinned?: boolean; archived?: boolean }) => void;
+  onUpdate?: (id: string, change: ChatChange) => void;
+  onDelete?: (chat: ChatSummary) => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
   const isCurrent = chat.id === current;
-  const isMain = chat.kind === "main";
-  const name = isMain ? "Main chat" : chat.title || "New side chat";
+  const name = chatName(chat);
+  const working = !!chat.activeRunId && !isCurrent;
+
+  if (renaming && onUpdate) {
+    return (
+      <RenameField
+        name={chat.title ?? ""}
+        onDone={(title) => {
+          setRenaming(false);
+          if (title && title !== chat.title) onUpdate(chat.id, { title });
+        }}
+      />
+    );
+  }
+
   return (
     <div className={`chat-row ${isCurrent ? "is-current" : ""}`}>
       <Link
@@ -517,7 +699,19 @@ function ChatLink({
             <PinIcon />
           </span>
         )}
-        <span>{name}</span>
+        <span className="chat-name">{name}</span>
+        {working ? (
+          <span className="row-status is-working" title="Replying">
+            <span className="sr-only">(replying)</span>
+          </span>
+        ) : (
+          unread &&
+          !isCurrent && (
+            <span className="row-status is-unread" title="New reply">
+              <span className="sr-only">(new reply)</span>
+            </span>
+          )
+        )}
       </Link>
       {onUpdate && (
         <Menu label={`Options for ${name}`} trigger={<MoreIcon />} className="row-menu">
@@ -533,6 +727,15 @@ function ChatLink({
                 {chat.pinned ? "Unpin" : "Pin"}
               </MenuItem>
               <MenuItem
+                icon={<PencilIcon />}
+                onSelect={() => {
+                  setRenaming(true);
+                  close();
+                }}
+              >
+                Rename
+              </MenuItem>
+              <MenuItem
                 icon={<ArchiveIcon />}
                 onSelect={() => {
                   onUpdate(chat.id, { archived: !chat.archived });
@@ -541,11 +744,109 @@ function ChatLink({
               >
                 {chat.archived ? "Unarchive" : "Archive"}
               </MenuItem>
+              {onDelete && (
+                <>
+                  <hr className="menu-divider" />
+                  <MenuItem
+                    icon={<TrashIcon />}
+                    danger
+                    onSelect={() => {
+                      onDelete(chat);
+                      close();
+                    }}
+                  >
+                    Delete
+                  </MenuItem>
+                </>
+              )}
             </>
           )}
         </Menu>
       )}
     </div>
+  );
+}
+
+/** Renames a chat in place: Enter or clicking away saves, Escape cancels. */
+function RenameField({ name, onDone }: { name: string; onDone: (title: string | null) => void }) {
+  const [value, setValue] = useState(name);
+  const done = useRef(false);
+  const finish = (title: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(title);
+  };
+  return (
+    <form
+      className="chat-row is-renaming"
+      onSubmit={(e) => {
+        e.preventDefault();
+        finish(value.replace(/\s+/g, " ").trim() || null);
+      }}
+    >
+      <label className="sr-only" htmlFor="rename-chat">
+        Chat name
+      </label>
+      <input
+        id="rename-chat"
+        className="rename-input"
+        value={value}
+        maxLength={120}
+        autoFocus
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => finish(value.replace(/\s+/g, " ").trim() || null)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") finish(null);
+        }}
+      />
+    </form>
+  );
+}
+
+/** A small centered dialog that asks before doing something that can't be undone. */
+function ConfirmDialog({
+  title,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  children,
+}: {
+  title: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="confirm"
+      aria-labelledby="confirm-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        onCancel();
+      }}
+      onClick={(e) => {
+        if (e.target === ref.current) onCancel();
+      }}
+    >
+      <h2 id="confirm-title">{title}</h2>
+      <p>{children}</p>
+      <div className="confirm-actions">
+        <button className="btn btn-ghost" type="button" onClick={onCancel} autoFocus>
+          Cancel
+        </button>
+        <button className="btn btn-danger" type="button" onClick={onConfirm}>
+          {confirmLabel}
+        </button>
+      </div>
+    </dialog>
   );
 }
 
@@ -598,6 +899,10 @@ const LibraryIcon = () => (
   <Icon d="M7 10.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14 10.5l3-6 3 6h-6ZM4 14h6v6H4v-6ZM17 20a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
 );
 const PlusIcon = () => <Icon d="M12 5v14M5 12h14" />;
+const PencilIcon = () => <Icon d="M4 20h4L19 9l-4-4L4 16v4ZM13 7l4 4" />;
+const TrashIcon = () => (
+  <Icon d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+);
 const ArrowUpIcon = () => <Icon d="M12 19V5M6 11l6-6 6 6" />;
 function StopIcon() {
   return (
