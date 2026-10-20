@@ -950,6 +950,7 @@ code {
 }
 .bcard-ask p {
   margin: 0 0 8px;
+  overflow-wrap: anywhere;
   font-size: var(--type-small-size);
 }
 .bcard-thumb {
