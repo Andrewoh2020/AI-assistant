@@ -12,6 +12,7 @@ import {
   verifySession,
 } from "./auth.js";
 import { cleanFileName } from "./files.js";
+import { extractText } from "./extract.js";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -135,6 +136,33 @@ describe("browse policy", () => {
       (await decide("browse", { task: "x", file_ids: ["../../etc/passwd"] }, publicResolver))
         .decision,
     ).toBe("deny");
+    expect((await decide("browse", { task: "x", title: "x".repeat(81) })).decision).toBe("deny");
+  });
+});
+
+describe("read_file policy", () => {
+  it("allows a file id and refuses anything else", async () => {
+    const id = "0b6f2c1e-6a51-4c5e-9d8e-0f4a2b1c3d4e";
+    expect((await decide("read_file", { file_id: id, start: 100 })).decision).toBe("allow");
+    expect((await decide("read_file", {})).decision).toBe("deny");
+    expect((await decide("read_file", { file_id: "../secrets" })).decision).toBe("deny");
+  });
+});
+
+describe("file text", () => {
+  it("reads text files and leaves images without text", async () => {
+    const txt = await extractText("notes.md", "text/markdown", Buffer.from("# Plan\n\nShip it"));
+    expect(txt.text).toBe("# Plan\n\nShip it");
+    const html = await extractText(
+      "page.html",
+      "text/html",
+      Buffer.from("<p>Hi&amp;bye</p><script>x()</script>"),
+    );
+    expect(html.text).toBe("Hi&bye");
+    const png = await extractText("photo.png", "image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    expect(png.text).toBeNull();
+    const broken = await extractText("bad.pdf", "application/pdf", Buffer.from("not a pdf"));
+    expect(broken.text).toBeNull();
   });
 });
 

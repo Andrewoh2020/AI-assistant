@@ -12,6 +12,7 @@ import { handBack, takeOver, viewOf } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
+import { extractText } from "./extract.js";
 import {
   advanceRun,
   Conflict,
@@ -343,12 +344,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       } catch {
         // Keep the default name.
       }
+      const mime = uploadType(req.headers);
+      const { text, pages } = await extractText(name, mime, data);
       const file = await saveFile(sql, s.userId, {
         kind: "upload",
         name: cleanFileName(name),
-        mime: uploadType(req.headers),
+        mime,
         data,
         chatId: chatId ?? null,
+        text,
+        pages,
       });
       return { file: fileView(file) };
     },

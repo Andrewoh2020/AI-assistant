@@ -26,7 +26,7 @@ import {
 } from "./browser.js";
 import { groundAnswer } from "./citations.js";
 import { Conflict, NotFound } from "./errors.js";
-import { attachmentNote, fileView } from "./files.js";
+import { attachmentNote, fileTexts, fileView } from "./files.js";
 import {
   claimToolCall,
   doneLineFor,
@@ -445,7 +445,15 @@ export async function sendMessage(
     const travilaRunId = await travila.sendMessage(
       s.travilaUserId,
       threadId,
-      input.text + attachmentNote(files),
+      input.text +
+        attachmentNote(
+          files,
+          await fileTexts(
+            sql,
+            s.userId,
+            files.map((f) => f.id),
+          ),
+        ),
     );
     await withUser(
       sql,

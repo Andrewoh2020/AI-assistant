@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { withUser, type FileRow, type Sql } from "@ai-assistant/db";
 import type { FileView } from "@ai-assistant/api-client";
+import { fence } from "./untrusted.js";
 
 /**
  * Files people attach and files the browser downloads. We keep our own copy of every file in the
@@ -41,6 +42,9 @@ export async function saveFile(
     data: Uint8Array;
     chatId?: string | null;
     runId?: string | null;
+    /** Text read out of the file (see extract.ts), when it has any. */
+    text?: string | null;
+    pages?: number | null;
   },
 ): Promise<FileRow> {
   const sha256 = createHash("sha256").update(input.data).digest("hex");
@@ -53,6 +57,10 @@ export async function saveFile(
       RETURNING *`;
     await tx`INSERT INTO file_blobs (file_id, user_id, data)
              VALUES (${file!.id}, ${userId}, ${Buffer.from(input.data)})`;
+    if (input.text) {
+      await tx`INSERT INTO file_texts (file_id, user_id, text, pages)
+               VALUES (${file!.id}, ${userId}, ${input.text}, ${input.pages ?? null})`;
+    }
     return file!;
   });
 }
@@ -73,14 +81,60 @@ export async function readFile(
   });
 }
 
-/** The line added to the user's message so the model knows which files came with it. */
-export function attachmentNote(files: FileRow[]): string {
+export interface FileText {
+  text: string;
+  pages: number | null;
+}
+
+/** The text read out of these files, for those that have any (row-level security applies). */
+export async function fileTexts(
+  sql: Sql,
+  userId: string,
+  fileIds: string[],
+): Promise<Map<string, FileText>> {
+  if (!fileIds.length) return new Map();
+  const rows = await withUser(
+    sql,
+    userId,
+    (tx) => tx<(FileText & { file_id: string })[]>`
+      SELECT file_id, text, pages FROM file_texts WHERE file_id = ANY(${fileIds})`,
+  );
+  return new Map(rows.map((r) => [r.file_id, { text: r.text, pages: r.pages }]));
+}
+
+/** How much attached text goes straight into the message; read_file fetches the rest. */
+export const INLINE_TEXT_CHARS = 60_000;
+/** Most text one read_file call returns. */
+export const READ_CHUNK_CHARS = 30_000;
+
+/**
+ * What's added to the user's message so the model knows which files came with it and can read
+ * them: the list, then each file's text (up to a shared budget) as untrusted content.
+ */
+export function attachmentNote(files: FileRow[], texts: Map<string, FileText>): string {
   if (!files.length) return "";
   const lines = files.map((f) => {
     const kb = Math.max(1, Math.round(Number(f.bytes ?? 0) / 1024));
-    return `- "${f.name}" (file_id: ${f.id}, ${f.mime}, ${kb} KB)`;
+    const pages = texts.get(f.id)?.pages;
+    return `- "${f.name}" (file_id: ${f.id}, ${f.mime}, ${kb} KB${pages ? `, ${pages} pages` : ""})`;
   });
-  return `\n\n[Attached files]\n${lines.join("\n")}`;
+  let budget = INLINE_TEXT_CHARS;
+  const bodies = files.map((f) => {
+    const t = texts.get(f.id);
+    if (!t) {
+      return `"${f.name}": no text could be read from this file (for example an image or a scan). Say so if the user asks about its contents. Use browse with its file_id only if it must be uploaded to a website.`;
+    }
+    const shown = t.text.slice(0, Math.max(budget, 0));
+    budget -= shown.length;
+    const rest =
+      shown.length < t.text.length
+        ? `\n(Shown: the first ${shown.length.toLocaleString("en-US")} of ${t.text.length.toLocaleString("en-US")} characters. Call read_file with file_id ${f.id} and start=${shown.length} to read more.)`
+        : "";
+    return shown
+      ? fence(`attached file "${f.name}"`, shown) + rest
+      : `"${f.name}": not shown here for length. Call read_file with file_id ${f.id} to read it.`;
+  });
+  return `\n\n[Attached files]\n${lines.join("\n")}\n\n${bodies.join("\n\n")}`;
 }
 
 /** Guesses a type from the extension, for files the browser saved. */
