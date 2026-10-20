@@ -19,7 +19,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { api } from "@/lib/client";
-import { Answer, SourcesList } from "./Answer";
+import { Answer } from "./Answer";
 
 const POLL_MS = 1500;
 
@@ -35,6 +35,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [navOpen, setNavOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<{ messageId: string; n: number | null } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -180,29 +182,78 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   const mainChat = chats.find((c) => c.kind === "main");
   const sideChats = chats.filter((c) => c.kind !== "main");
-  const selectedMessage = selected ? messages.find((m) => m.id === selected.messageId) : undefined;
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
   const working = !!activeRunId;
   const isEmpty = messages.length === 0 && !working;
 
+  const q = query.trim().toLowerCase();
+  const shownSideChats = q
+    ? sideChats.filter((c) => (c.title || "New side chat").toLowerCase().includes(q))
+    : sideChats;
+
   return (
-    <div className={`shell ${navOpen ? "nav-open" : ""}`}>
+    <div className={`shell ${navOpen ? "nav-open" : ""} ${sidebarHidden ? "sidebar-hidden" : ""}`}>
       <a className="skip-link" href="#composer-input">
         Skip to the message box
       </a>
 
+      <nav className="rail" aria-label="Sections">
+        <div className="rail-tabs">
+          <Link
+            href={mainChat ? `/chat/${mainChat.id}` : "/"}
+            className="rail-btn is-current"
+            aria-label="Chat"
+            title="Chat"
+          >
+            <ChatIcon />
+          </Link>
+          {COMING_SOON.map(({ label, Icon }) => (
+            <button
+              key={label}
+              className="rail-btn"
+              type="button"
+              disabled
+              aria-label={`${label} (coming soon)`}
+              title={`${label} (coming soon)`}
+            >
+              <Icon />
+            </button>
+          ))}
+        </div>
+        <button
+          className="rail-btn"
+          type="button"
+          aria-label={sidebarHidden ? "Show chats" : "Hide chats"}
+          aria-expanded={!sidebarHidden}
+          onClick={() => setSidebarHidden(!sidebarHidden)}
+        >
+          <MenuIcon />
+        </button>
+      </nav>
+
       <nav className="sidebar" aria-label="Chats">
         <div className="sidebar-head">
-          <span className="brand">Assistant</span>
-          <button
-            className="btn btn-secondary btn-round"
-            type="button"
-            onClick={newSideChat}
-            aria-label="New side chat"
-            title="New side chat"
-          >
-            <ComposeIcon />
-          </button>
+          <label className="search">
+            <SearchIcon />
+            <span className="sr-only">Search chats</span>
+            <input
+              type="search"
+              placeholder="Search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <details className="more">
+            <summary className="icon-btn" aria-label="More" title="More">
+              <MoreIcon />
+            </summary>
+            <div className="menu" role="menu">
+              <p className="menu-who">{me?.displayName || me?.email}</p>
+              <button className="menu-item" type="button" role="menuitem" onClick={signOut}>
+                Sign out
+              </button>
+            </div>
+          </details>
         </div>
         <ul className="chat-list">
           {mainChat && (
@@ -211,25 +262,26 @@ export function AppShell({ chatId }: { chatId: string }) {
             </li>
           )}
         </ul>
-        {sideChats.length > 0 && (
-          <>
-            <hr className="nav-divider" />
-            <p className="nav-label">Side chats</p>
-            <ul className="chat-list">
-              {sideChats.map((c) => (
-                <li key={c.id}>
-                  <ChatLink chat={c} current={chatId} onPick={() => setNavOpen(false)} />
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-        <div className="sidebar-foot">
-          <span className="who">{me?.displayName || me?.email}</span>
-          <button className="btn btn-ghost btn-small" type="button" onClick={signOut}>
-            Sign out
+        <div className="nav-label">
+          <span>Side chats</span>
+          <button
+            className="icon-btn"
+            type="button"
+            onClick={newSideChat}
+            aria-label="New side chat"
+            title="New side chat"
+          >
+            <PlusIcon />
           </button>
         </div>
+        <ul className="chat-list">
+          {shownSideChats.map((c) => (
+            <li key={c.id}>
+              <ChatLink chat={c} current={chatId} onPick={() => setNavOpen(false)} />
+            </li>
+          ))}
+          {q && shownSideChats.length === 0 && <li className="muted nav-empty">No matches</li>}
+        </ul>
       </nav>
 
       <main className="chat">
@@ -272,7 +324,11 @@ export function AppShell({ chatId }: { chatId: string }) {
                   {m.role === "user" ? (
                     <p className="user-text">{m.text}</p>
                   ) : (
-                    <Answer message={m} onCite={onCite} />
+                    <Answer
+                      message={m}
+                      onCite={onCite}
+                      highlight={selected?.messageId === m.id ? selected.n : null}
+                    />
                   )}
                 </article>
                 {ended && (
@@ -313,37 +369,36 @@ export function AppShell({ chatId }: { chatId: string }) {
               {sendError}
             </p>
           )}
-          <label className="sr-only" htmlFor="composer-input">
-            Message
-          </label>
-          <textarea
-            id="composer-input"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Ask anything"
-            rows={1}
-            maxLength={8000}
-          />
-          {working ? (
-            <button className="btn btn-secondary" type="button" onClick={stop}>
-              Stop
-            </button>
-          ) : (
-            <button className="btn btn-primary" type="submit" disabled={!draft.trim()}>
-              Send
-            </button>
-          )}
+          <div className="composer-box">
+            <label className="sr-only" htmlFor="composer-input">
+              Message
+            </label>
+            <textarea
+              id="composer-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Message"
+              rows={1}
+              maxLength={8000}
+            />
+            {working ? (
+              <button className="send-btn is-active" type="button" onClick={stop} aria-label="Stop">
+                <StopIcon />
+              </button>
+            ) : (
+              <button
+                className={`send-btn ${draft.trim() ? "is-active" : ""}`}
+                type="submit"
+                disabled={!draft.trim()}
+                aria-label="Send"
+              >
+                <ArrowUpIcon />
+              </button>
+            )}
+          </div>
         </form>
       </main>
-
-      <aside className="detail" aria-label="Sources for the selected answer">
-        {selectedMessage && selectedMessage.sources.length > 0 ? (
-          <SourcesList message={selectedMessage} highlight={selected?.n ?? null} />
-        ) : (
-          <p className="muted">Sources for an answer appear here.</p>
-        )}
-      </aside>
     </div>
   );
 }
@@ -366,7 +421,6 @@ function ChatLink({
       aria-current={isCurrent ? "page" : undefined}
       onClick={onPick}
     >
-      {isMain && <ChatIcon />}
       <span>{isMain ? "Main chat" : chat.title || "New side chat"}</span>
     </Link>
   );
@@ -385,11 +439,20 @@ function ChatIcon() {
   );
 }
 
-function ComposeIcon() {
+function MenuIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M5 9h14M5 15h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+type IconProps = { d: string };
+function Icon({ d }: IconProps) {
   return (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path
-        d="M11 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4M17.5 3.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 8.5-8.5Z"
+        d={d}
         stroke="currentColor"
         strokeWidth="1.8"
         strokeLinecap="round"
@@ -398,11 +461,43 @@ function ComposeIcon() {
     </svg>
   );
 }
-
-function MenuIcon() {
+const SearchIcon = () => <Icon d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4-4" />;
+const FeedIcon = () => (
+  <Icon d="M8 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9h4V4Zm0 5v11M11 8h6M11 12h6" />
+);
+const IdeasIcon = () => (
+  <Icon d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3Z" />
+);
+const GoalsIcon = () => (
+  <Icon d="M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2.5 8.5 2.5 2.5 5-6" />
+);
+const LibraryIcon = () => (
+  <Icon d="M7 10.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14 10.5l3-6 3 6h-6ZM4 14h6v6H4v-6ZM17 20a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+);
+const PlusIcon = () => <Icon d="M12 5v14M5 12h14" />;
+const ArrowUpIcon = () => <Icon d="M12 19V5M6 11l6-6 6 6" />;
+function StopIcon() {
   return (
-    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M5 9h14M5 15h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
     </svg>
   );
 }
+function MoreIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Muse's other tabs. Shown so the layout matches; they arrive in later milestones. */
+const COMING_SOON = [
+  { label: "Search", Icon: SearchIcon },
+  { label: "Feed", Icon: FeedIcon },
+  { label: "Ideas", Icon: IdeasIcon },
+  { label: "Goals", Icon: GoalsIcon },
+  { label: "Library", Icon: LibraryIcon },
+];

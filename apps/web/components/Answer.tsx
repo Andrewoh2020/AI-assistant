@@ -15,9 +15,11 @@ function linkCitations(text: string, sources: SourceView[]): string {
 export function Answer({
   message,
   onCite,
+  highlight = null,
 }: {
   message: MessageView;
   onCite: (message: MessageView, n: number) => void;
+  highlight?: number | null;
 }) {
   const components: Components = {
     a({ href, children }) {
@@ -51,7 +53,7 @@ export function Answer({
         </ReactMarkdown>
       </div>
 
-      {message.sources.length > 0 && <SourcesList message={message} />}
+      {message.sources.length > 0 && <SourcesList message={message} highlight={highlight} />}
 
       {message.reasoning && (
         <details className="reasoning">

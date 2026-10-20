@@ -1,8 +1,9 @@
 /**
- * Design tokens for web and mobile. Colors, type sizes and corner radii are measured from the
- * Muse iPhone app (screenshots Andrew shared on 2026-10-20): near-white page, gray assistant
- * bubbles, light-blue user bubbles, near-black text, blue links, Apple's system font.
- * Dark mode is derived from the same scheme until we have Muse dark-mode screenshots.
+ * Design tokens for web and mobile, measured from the Muse apps (iPhone and desktop screenshots
+ * Andrew shared on 2026-10-20): near-white page, gray assistant bubbles, light-blue user
+ * bubbles, near-black text, blue links, Apple's system font.
+ * The web app is light-only for now (Andrew, 2026-10-20). Dark values are measured from Muse's
+ * desktop dark mode and kept here for later; buildCss() does not emit them.
  * One source: `scripts/build-css.mjs` turns this into CSS variables for the web app,
  * and the mobile app will import the same objects as a typed theme.
  */
@@ -11,29 +12,32 @@ export type Mode = "light" | "dark";
 
 export const colors = {
   light: {
-    /** Page and sidebar background. */
+    /** Page, sidebar and icon rail background. */
     bg: "#FCFCFC",
-    /** Floating controls: message box, round buttons, cards. Shown with a soft shadow. */
+    /** Floating controls: message box, search field, round buttons, cards. */
     surface: "#FFFFFF",
-    /** Code blocks and quiet fills. */
+    /** Current icon in the rail; code blocks and quiet fills. */
     surface2: "#F3F4F5",
-    /** The current item in the sidebar and tab bar. */
-    selected: "#EEEFF0",
+    /** The current chat in the sidebar. */
+    selected: "#F6F6F6",
     /** Assistant message bubble. */
     bubble: "#E9EAEB",
     /** Divider inside an assistant bubble (above Sources). */
     bubbleLine: "#D5D6D8",
     /** User message bubble. */
     bubbleUser: "#BFDAFB",
-    ink: "#111111",
-    ink2: "#666769",
-    /** Muse's hint gray: placeholders and small section labels only. */
-    ink3: "#A4A6A9",
+    bubbleUserInk: "#111112",
+    ink: "#111112",
+    ink2: "#686A6D",
+    /** Muse's hint gray: placeholders only. */
+    ink3: "#A0A2A5",
     line: "#E2E2E2",
     /** Links and citations. */
     accent: "#2962CD",
     accentInk: "#FFFFFF",
     accentSoft: "#DCE7FA",
+    /** Send button while there is nothing to send. */
+    sendIdle: "#E5F0FD",
     success: "#18794E",
     successSoft: "#E6F4EC",
     warn: "#8A5F00",
@@ -42,20 +46,22 @@ export const colors = {
     dangerSoft: "#FDECEC",
   },
   dark: {
-    bg: "#0F0F10",
-    surface: "#1C1C1E",
-    surface2: "#232325",
-    selected: "#2A2A2C",
-    bubble: "#262729",
-    bubbleLine: "#3A3B3E",
-    bubbleUser: "#1F3B5E",
-    ink: "#F2F2F3",
-    ink2: "#A3A5A8",
-    ink3: "#6F7174",
-    line: "#2C2D2F",
-    accent: "#7FABF2",
+    bg: "#181819",
+    surface: "#323232",
+    surface2: "#28292B",
+    selected: "#262627",
+    bubble: "#1F1F20",
+    bubbleLine: "#38393B",
+    bubbleUser: "#3172E0",
+    bubbleUserInk: "#FFFFFF",
+    ink: "#FFFFFF",
+    ink2: "#8C8E93",
+    ink3: "#7B7C80",
+    line: "#343435",
+    accent: "#5D91F7",
     accentInk: "#0B1A2B",
     accentSoft: "#1E2D47",
+    sendIdle: "#324C78",
     success: "#4CC38A",
     successSoft: "#16301F",
     warn: "#E0B341",
@@ -79,11 +85,11 @@ export const type = {
   web: {
     display: [34, 1.15, 700],
     h1: [24, 1.2, 700],
-    h2: [21, 1.25, 700],
-    h3: [17, 1.3, 600],
-    body: [17, 1.3, 400],
-    small: [15, 1.35, 400],
-    caption: [13, 1.3, 500],
+    h2: [20, 1.25, 700],
+    h3: [16, 1.35, 600],
+    body: [16, 1.375, 400],
+    small: [14, 1.4, 400],
+    caption: [12, 1.35, 400],
   },
   mobile: {
     display: [34, 1.15, 700],
@@ -114,7 +120,11 @@ export const shadow = {
 
 export const layout = {
   contentMax: 1020,
-  chatColumn: 760,
+  /** Measured from Muse desktop: messages 720px wide, message box 768px. */
+  chatColumn: 720,
+  composerMax: 768,
+  railWidth: 80,
+  sidebarWidth: 240,
   stackBelow: 720,
   phoneMax: 430,
   tabletMax: 1024,
@@ -136,13 +146,13 @@ export const contrastPairs: ReadonlyArray<[fg: ColorName, bg: ColorName, min: nu
   ["ink", "surface2", 4.5],
   ["ink", "selected", 4.5],
   ["ink", "bubble", 4.5],
-  ["ink", "bubbleUser", 4.5],
+  ["bubbleUserInk", "bubbleUser", 4.5],
   ["ink2", "bubble", 4.5],
   ["ink2", "bg", 4.5],
   ["ink2", "surface", 4.5],
   ["ink2", "surface2", 4.5],
-  // ink3 is Muse's own hint gray (about 2.4:1). Kept to match Muse; it is used only for
-  // placeholders and section labels, never for content.
+  // ink3 is Muse's own placeholder gray (about 2.5:1). Kept to match Muse; used only for
+  // placeholder text, never for content.
   ["ink3", "surface", 2.3],
   ["accent", "bg", 4.5],
   ["accent", "surface", 4.5],
@@ -195,32 +205,22 @@ export function cssStatic(): string {
   lines.push(
     `  --content-max: ${layout.contentMax}px;`,
     `  --chat-column: ${layout.chatColumn}px;`,
+    `  --composer-max: ${layout.composerMax}px;`,
+    `  --rail-width: ${layout.railWidth}px;`,
+    `  --sidebar-width: ${layout.sidebarWidth}px;`,
   );
   lines.push(`  --touch: ${layout.touchTargetWeb}px;`);
   lines.push(`  --motion-fast: ${motion.fast}ms;`, `  --motion-base: ${motion.base}ms;`);
   return lines.join("\n");
 }
 
-/**
- * Full stylesheet. Dark mode follows the system setting unless the page sets
- * data-theme="light" or data-theme="dark" on <html>.
- */
+/** Full stylesheet. Light only for now; the dark tokens above are not emitted. */
 export function buildCss(): string {
   return `/* Generated by @ai-assistant/tokens. Do not edit by hand. */
 :root {
 ${cssStatic()}
 ${cssVariables("light")}
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-${cssVariables("dark")}
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-${cssVariables("dark")}
-  color-scheme: dark;
 }
 `;
 }

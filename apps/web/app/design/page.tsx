@@ -158,7 +158,6 @@ export default function DesignPage() {
 
       <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
         <Panel mode="light" />
-        <Panel mode="dark" />
       </div>
     </main>
   );
