@@ -34,9 +34,11 @@ import type { SearchBackend } from "./search.js";
 import type { Travila } from "./travila.js";
 import {
   deleteLogin,
+  editLogin,
   existingLogins,
   importLogins,
   listLogins,
+  revealLogin,
   setAskBeforeUse,
   setCodeKey,
   vaultActivity,
@@ -519,6 +521,60 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!(await deleteLogin(sql, s.userId, req.params.id))) throw new NotFound("saved login");
     return { ok: true };
   });
+
+  // The person's own login, shown on the Vault page so they can check or change it. The assistant
+  // has no way to call these.
+  app.post<{ Params: { id: string } }>("/vault/logins/:id/reveal", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+    let login;
+    try {
+      login = await revealLogin(sql, vaultKey, s.userId, req.params.id);
+    } catch (err) {
+      throw new Conflict(err instanceof Error ? err.message : "This login can't be opened.");
+    }
+    if (!login) throw new NotFound("saved login");
+    reply.header("Cache-Control", "no-store");
+    return login;
+  });
+
+  app.put<{ Params: { id: string }; Body: { username: string; password: string } }>(
+    "/vault/logins/:id/login",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["username", "password"],
+          properties: {
+            username: { type: "string", maxLength: 1000 },
+            password: { type: "string", minLength: 1, maxLength: 1000 },
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("saved login");
+      let result;
+      try {
+        result = await editLogin(sql, vaultKey, s.userId, req.params.id, {
+          username: req.body.username.trim(),
+          password: req.body.password,
+        });
+      } catch (err) {
+        throw new Conflict(err instanceof Error ? err.message : "This login can't be opened.");
+      }
+      if (result === "missing") throw new NotFound("saved login");
+      if (result === "taken") {
+        throw new Conflict("You already have a saved login with that username for this site.");
+      }
+      reply.header("Cache-Control", "no-store");
+      return { ok: true };
+    },
+  );
 
   // A login's authenticator key, for 2-step codes. Write-only: it is never sent back.
   app.post<{ Params: { id: string }; Body: { key: string } }>(

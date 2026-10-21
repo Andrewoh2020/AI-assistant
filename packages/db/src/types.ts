@@ -184,7 +184,9 @@ export interface AuditEventRow {
     | "ask_off"
     | "code_saved"
     | "code_removed"
-    | "code_used";
+    | "code_used"
+    | "viewed"
+    | "edited";
   site: string | null;
   account: string | null;
   detail: string | null;

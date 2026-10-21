@@ -186,7 +186,10 @@ export async function saveLogin(
       : await tx<CredentialRow[]>`
           SELECT * FROM vault.credentials WHERE site = ${input.site} AND account = ${account}`;
     const id = replacing?.id ?? randomUUID();
-    const sealed = seal(vk, context(userId, id, input.site), input);
+    const sealed = seal(vk, context(userId, id, input.site), {
+      username: input.username,
+      password: input.password,
+    });
     if (replacing) {
       // Taking the place of the turned-down login can clash with another login for that account.
       if (replacing.account !== account) {
@@ -310,6 +313,66 @@ export async function listLogins(sql: Sql, userId: string): Promise<VaultLogin[]
     lastUsedAt: r.last_used_at?.toISOString() ?? null,
     lastResultAt: r.last_result_at?.toISOString() ?? null,
   }));
+}
+
+/** The login itself, for its owner on the Vault page. Logged, never cached. */
+export async function revealLogin(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  id: string,
+): Promise<{ username: string; password: string } | null> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`SELECT * FROM vault.credentials WHERE id = ${id}`;
+    if (!row) return null;
+    const login = unseal(vk, context(userId, row.id, row.site), row);
+    if (!login) throw new Error("This saved login can't be opened. Delete it and save it again.");
+    await audit(tx, userId, "viewed", row.site, row.account, null);
+    return { username: login.username, password: login.password };
+  });
+}
+
+/**
+ * Changes a saved login's username or password from the Vault page. Its authenticator key, if
+ * any, is kept. "taken" when another saved login for that site already has the new username.
+ */
+export async function editLogin(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  id: string,
+  login: { username: string; password: string },
+): Promise<"ok" | "missing" | "taken"> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<CredentialRow[]>`
+      SELECT * FROM vault.credentials WHERE id = ${id} FOR UPDATE`;
+    if (!row) return "missing";
+    const [other] = await tx`
+      SELECT 1 FROM vault.credentials
+      WHERE site = ${row.site} AND account = ${login.username} AND id <> ${id}`;
+    if (other) return "taken";
+    const aad = context(userId, row.id, row.site);
+    const codeKey = row.sealed_otp
+      ? withDataKey(
+          vk,
+          aad,
+          row,
+          (key) =>
+            JSON.parse(decrypt(key, `${aad}:otp`, row.sealed_otp!).toString("utf8")) as TotpKey,
+        )
+      : null;
+    if (row.sealed_otp && !codeKey) {
+      throw new Error("This saved login can't be opened. Delete it and save it again.");
+    }
+    const sealed = seal(vk, aad, login, codeKey);
+    await tx`
+      UPDATE vault.credentials SET account = ${login.username}, sealed = ${sealed.sealed},
+        sealed_otp = ${sealed.sealed_otp}, wrapped_key = ${sealed.wrapped_key},
+        key_id = ${sealed.key_id}, last_result = NULL, last_result_at = NULL, updated_at = now()
+      WHERE id = ${id}`;
+    await audit(tx, userId, "edited", row.site, login.username, null);
+    return "ok";
+  });
 }
 
 export async function setAskBeforeUse(
