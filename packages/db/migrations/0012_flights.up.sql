@@ -18,6 +18,8 @@ CREATE TABLE travel_profiles (
   passport_expiry date,
   -- Where the "time to leave" reminder starts from for flights from home.
   home_address text,
+  -- Left empty on a trip card: not asked again (the leave reminder allows an hour instead).
+  skipped_home_address boolean NOT NULL DEFAULT false,
   seat_side text CHECK (seat_side IN ('window', 'aisle', 'any')),
   seat_zone text CHECK (seat_zone IN ('front', 'middle', 'back', 'any')),
   seat_empty_nearby boolean,

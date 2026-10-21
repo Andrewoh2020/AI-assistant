@@ -420,7 +420,8 @@ function PrepForm({
     copy("nationality", "nationality");
     copy("passportNumber", "passportNumber");
     copy("passportExpiry", "passportExpiry");
-    copy("homeAddress", "homeAddress");
+    // Left empty: not asked again (the leave reminder then allows an hour to get there).
+    if (need.has("homeAddress")) out.homeAddress = v.homeAddress?.trim() ?? "";
     // Optional ones are asked once: left empty means "I don't have one".
     if (need.has("knownTraveler")) out.knownTravelerNumber = v.knownTravelerNumber?.trim() || null;
     if (need.has("frequentFlyer")) out.frequentFlyerNumber = v.frequentFlyerNumber?.trim() || null;
@@ -542,8 +543,9 @@ function PrepForm({
       {(need.has("passportNumber") || need.has("passportExpiry")) && (
         <div className="trip-row">
           {need.has("passportNumber") && (
-            <Field label="Passport number" hint="Hidden from the assistant">
+            <Field label="Passport number">
               <input
+                placeholder="Kept hidden"
                 value={v.passportNumber ?? ""}
                 onChange={(e) => set("passportNumber", e.target.value)}
                 autoComplete="off"
@@ -564,8 +566,9 @@ function PrepForm({
         </div>
       )}
       {need.has("knownTraveler") && (
-        <Field label="TSA PreCheck or Global Entry number" hint="Leave empty if you don't have one">
+        <Field label="TSA PreCheck or Global Entry number">
           <input
+            placeholder="Optional"
             value={v.knownTravelerNumber ?? ""}
             onChange={(e) => set("knownTravelerNumber", e.target.value)}
             autoComplete="off"
@@ -575,8 +578,9 @@ function PrepForm({
         </Field>
       )}
       {need.has("frequentFlyer") && (
-        <Field label={ffName} hint="Leave empty if you don't have one">
+        <Field label={ffName}>
           <input
+            placeholder="Optional"
             value={v.frequentFlyerNumber ?? ""}
             onChange={(e) => set("frequentFlyerNumber", e.target.value)}
             autoComplete="off"
@@ -628,11 +632,9 @@ function PrepForm({
         </fieldset>
       )}
       {need.has("homeAddress") && (
-        <Field
-          label="Where do you usually leave for the airport from?"
-          hint="For the time-to-leave reminder"
-        >
+        <Field label="Where you leave for the airport from">
           <input
+            placeholder="Home address (optional)"
             value={v.homeAddress ?? ""}
             onChange={(e) => set("homeAddress", e.target.value)}
             autoComplete="street-address"
@@ -649,11 +651,6 @@ function PrepForm({
           />
           I&apos;m not carrying any banned items in my bags (the airline asks this at check-in)
         </label>
-      )}
-      {f.arrival?.stay && f.arrival.status !== "done" && (
-        <p className="trip-note">
-          {f.arrival.form}: I&apos;ll use {f.arrival.stay} from your booking.
-        </p>
       )}
       {error && (
         <p className="form-error" role="alert">

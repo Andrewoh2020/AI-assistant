@@ -26,6 +26,7 @@ export interface TravelProfileRow {
   passport_country: string | null;
   passport_expiry: Date | null;
   home_address: string | null;
+  skipped_home_address: boolean;
   seat_side: "window" | "aisle" | "any" | null;
   seat_zone: "front" | "middle" | "back" | "any" | null;
   seat_empty_nearby: boolean | null;
@@ -46,6 +47,7 @@ export const EMPTY_PROFILE: Omit<TravelProfileRow, "user_id"> = {
   passport_country: null,
   passport_expiry: null,
   home_address: null,
+  skipped_home_address: false,
   seat_side: null,
   seat_zone: null,
   seat_empty_nearby: null,
@@ -137,7 +139,7 @@ export function needsFor(p: TravelProfileRow, f: FlightFacts): FlightNeeds {
   ) {
     optional.push("seatStyle");
   } else have.push("seat style");
-  if (!p.home_address) optional.push("homeAddress");
+  if (!p.home_address && !p.skipped_home_address) optional.push("homeAddress");
 
   const warnings: string[] = [];
   const expiry = isoDate(p.passport_expiry);
@@ -282,6 +284,7 @@ export async function savePrep(
         ? (input.passportExpiry as unknown as Date)
         : p.passport_expiry,
       home_address: trim(input.homeAddress) || p.home_address,
+      skipped_home_address: p.skipped_home_address || input.homeAddress?.trim() === "",
       seat_side: input.seatSide ?? p.seat_side,
       seat_zone: input.seatZone ?? p.seat_zone,
       seat_empty_nearby: input.seatEmptyNearby ?? p.seat_empty_nearby,
@@ -307,11 +310,11 @@ export async function savePrep(
 async function writeProfile(tx: TransactionSql, userId: string, p: TravelProfileRow) {
   await tx`
     INSERT INTO travel_profiles (user_id, first_name, middle_name, last_name, date_of_birth, gender,
-      nationality, passport_country, passport_expiry, home_address, seat_side, seat_zone,
+      nationality, passport_country, passport_expiry, home_address, skipped_home_address, seat_side, seat_zone,
       seat_empty_nearby, seat_avoid_washroom, saved_documents, no_known_traveler,
       no_frequent_flyer, answers)
     VALUES (${userId}, ${p.first_name}, ${p.middle_name}, ${p.last_name}, ${p.date_of_birth},
-      ${p.gender}, ${p.nationality}, ${p.passport_country}, ${p.passport_expiry}, ${p.home_address},
+      ${p.gender}, ${p.nationality}, ${p.passport_country}, ${p.passport_expiry}, ${p.home_address}, ${p.skipped_home_address},
       ${p.seat_side}, ${p.seat_zone}, ${p.seat_empty_nearby}, ${p.seat_avoid_washroom},
       ${p.saved_documents}, ${p.no_known_traveler}, ${p.no_frequent_flyer},
       ${tx.json(p.answers)})
@@ -320,7 +323,8 @@ async function writeProfile(tx: TransactionSql, userId: string, p: TravelProfile
       last_name = EXCLUDED.last_name, date_of_birth = EXCLUDED.date_of_birth,
       gender = EXCLUDED.gender, nationality = EXCLUDED.nationality,
       passport_country = EXCLUDED.passport_country, passport_expiry = EXCLUDED.passport_expiry,
-      home_address = EXCLUDED.home_address, seat_side = EXCLUDED.seat_side,
+      home_address = EXCLUDED.home_address, skipped_home_address = EXCLUDED.skipped_home_address,
+      seat_side = EXCLUDED.seat_side,
       seat_zone = EXCLUDED.seat_zone, seat_empty_nearby = EXCLUDED.seat_empty_nearby,
       seat_avoid_washroom = EXCLUDED.seat_avoid_washroom,
       saved_documents = EXCLUDED.saved_documents, no_known_traveler = EXCLUDED.no_known_traveler,
