@@ -129,6 +129,13 @@ CREATE FUNCTION app_due_flights(p_now timestamptz, p_limit integer)
   $$;
 REVOKE ALL ON FUNCTION app_due_flights(timestamptz, integer) FROM PUBLIC;
 
+-- When the next flight needs looking at, so the scheduler can sleep until then.
+CREATE FUNCTION app_next_flight_due()
+  RETURNS timestamptz
+  LANGUAGE sql SECURITY DEFINER SET search_path = public
+  AS $$ SELECT min(next_due_at) FROM flight_plans $$;
+REVOKE ALL ON FUNCTION app_next_flight_due() FROM PUBLIC;
+
 -- People with Gmail connected, so new booking emails are found even when the app is closed.
 CREATE FUNCTION app_gmail_users(p_limit integer)
   RETURNS TABLE (user_id uuid)

@@ -33,7 +33,8 @@ import { travelDocumentsForRun, type VaultKey } from "./vault.js";
  * - Arrival cards (Singapore, Thailand) are filed on the official site after one tap of OK.
  * - On the day, the card shows live status, and a "time to leave" message picks car or train.
  *
- * The scheduler (tick) runs every minute on a computer, and whenever the person opens the app.
+ * The scheduler (tick) wakes when a flight next needs something (each flight keeps its own next
+ * time), and whenever the person opens the app. Most wake-ups make no paid calls at all.
  */
 
 export interface FlightDeps {
@@ -1192,18 +1193,46 @@ async function followArrival(c: Ctx, form: (typeof ARRIVAL_CARDS)[string]): Prom
 
 // Live status ------------------------------------------------------------------------------------
 
+/**
+ * When to next look up a flight's live status, given the last look. Each look is a paid FlightAware
+ * lookup, so about 20 per flight: once a day from 3 days out, every 6 hours from 2 days out, every
+ * 15 minutes in the last 3 hours, then one look after it should have landed. Null: no more.
+ */
+export function nextStatusAt(
+  last: number,
+  now: number,
+  depart: number,
+  lands: number | null,
+  departed: boolean,
+): number | null {
+  if (departed || now > depart + HOUR) {
+    const landCheck = (lands ?? depart + 18 * HOUR) + 15 * MINUTE;
+    return last >= landCheck ? null : landCheck;
+  }
+  const until = depart - now;
+  if (until > 72 * HOUR) return depart - 72 * HOUR;
+  const gap = until > 48 * HOUR ? 24 * HOUR : until > 3 * HOUR ? 6 * HOUR : 15 * MINUTE;
+  const final = depart - 3 * HOUR;
+  // Don't miss the start of the last 3 hours.
+  return last < final && now < final ? Math.min(last + gap, final) : last + gap;
+}
+
 async function stepStatus(c: Ctx, depart: Date, arrive: Date | null): Promise<Date | null> {
   const { deps, now, b, plan } = c;
   if (!deps.status.available || !b.flightNumber || !b.fromCode) return null;
-  if (plan.live?.landed) return null;
-  const until = depart.getTime() - now.getTime();
-  // Muse's cadence: daily until 2 days out, hourly until 6 hours out, then every 10 minutes.
-  const gap = until > 48 * HOUR ? 24 * HOUR : until > 6 * HOUR ? HOUR : 10 * MINUTE;
+  if (plan.live?.landed || plan.live?.cancelled) return null;
   const last = plan.live_checked_at ? new Date(plan.live_checked_at).getTime() : 0;
-  const nextAt = new Date(Math.max(last + gap, now.getTime()));
-  // Only worth asking within a week of the flight (FlightAware only has schedules that far out).
-  if (until > 7 * 24 * HOUR) return new Date(depart.getTime() - 7 * 24 * HOUR);
-  if (now.getTime() < last + gap) return nextAt;
+  const lands = (live: LiveFlight | null) =>
+    live?.arriveAt ? Date.parse(live.arriveAt) : (arrive?.getTime() ?? null);
+  const due = nextStatusAt(
+    last,
+    now.getTime(),
+    depart.getTime(),
+    lands(plan.live),
+    !!plan.live?.departed,
+  );
+  if (due === null) return null;
+  if (now.getTime() < due) return new Date(due);
   let live: LiveFlight | null = null;
   try {
     live = await deps.status.find(b.flightNumber, b.fromCode, depart);
@@ -1212,8 +1241,16 @@ async function stepStatus(c: Ctx, depart: Date, arrive: Date | null): Promise<Da
   }
   await patch(c, { live: live ? deps.sql.json(live as never) : plan.live, live_checked_at: now });
   if (live) await statusNews(c, live, depart);
-  const end = (arrive?.getTime() ?? depart.getTime() + 18 * HOUR) + HOUR;
-  return live?.landed || now.getTime() > end ? null : new Date(now.getTime() + gap);
+  if (live?.landed || live?.cancelled) return null;
+  const known = live ?? plan.live;
+  const next = nextStatusAt(
+    now.getTime(),
+    now.getTime(),
+    depart.getTime(),
+    lands(known),
+    !!known?.departed,
+  );
+  return next === null ? null : new Date(next);
 }
 
 async function statusNews(c: Ctx, live: LiveFlight, depart: Date) {
@@ -1266,17 +1303,16 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
   const to = airport(b.fromCode);
   let car: RouteOption | null = null;
   let train: RouteOption | null = null;
-  const checked = plan.leave_plan?.checkedAt ? new Date(plan.leave_plan.checkedAt).getTime() : 0;
-  const fresh = now.getTime() - checked < 30 * MINUTE;
-  if (fresh && plan.leave_plan) {
-    car =
-      plan.leave_plan.mode === "car"
-        ? { mode: "car", minutes: plan.leave_plan.minutes! }
-        : plan.leave_plan.other;
-    train =
-      plan.leave_plan.mode === "train"
-        ? { mode: "train", minutes: plan.leave_plan.minutes! }
-        : plan.leave_plan.other;
+  // Traffic lookups are paid: one when the card first shows the leave time (6 hours out), and one
+  // fresh one just before the reminder goes out.
+  const prev = plan.leave_plan;
+  const checked = prev?.checkedAt ? Date.parse(prev.checkedAt) : 0;
+  const prevSend = plan.leave_by ? new Date(plan.leave_by).getTime() - 30 * MINUTE : null;
+  const refreshAt = prevSend ? prevSend - 15 * MINUTE : null;
+  const fresh = !!prev && !(refreshAt && now.getTime() >= refreshAt && checked < refreshAt);
+  if (fresh && prev) {
+    car = prev.mode === "car" ? { mode: "car", minutes: prev.minutes! } : prev.other;
+    train = prev.mode === "train" ? { mode: "train", minutes: prev.minutes! } : prev.other;
   } else if (deps.routes.available && to) {
     const guess = new Date(beAt.getTime() - HOUR);
     const route = (m: "car" | "train") =>
@@ -1297,13 +1333,21 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
     from,
     beAt: beAt.toISOString(),
     early,
-    checkedAt: fresh ? plan.leave_plan!.checkedAt : now.toISOString(),
+    checkedAt: fresh ? prev!.checkedAt : now.toISOString(),
   };
   await patch(c, { leave_by: leaveBy, leave_plan: deps.sql.json(leavePlan as never) });
   const sendAt = new Date(leaveBy.getTime() - 30 * MINUTE);
-  if (now < sendAt) return new Date(Math.min(sendAt.getTime(), now.getTime() + 30 * MINUTE));
+  const recheck = sendAt.getTime() - 15 * MINUTE;
+  if (now < sendAt) {
+    return new Date(
+      now.getTime() < recheck && Date.parse(leavePlan.checkedAt) < recheck
+        ? recheck
+        : sendAt.getTime(),
+    );
+  }
   await tell(c, "leave", leaveText(c, leaveBy, leavePlan, now));
-  return new Date(Math.min(leaveBy.getTime() - 10 * MINUTE, now.getTime() + 15 * MINUTE));
+  // One more traffic look, 15 minutes before leaving.
+  return new Date(leaveBy.getTime() - 15 * MINUTE);
 }
 
 export function pickMode(car: RouteOption | null, train: RouteOption | null): RouteOption | null {
@@ -1347,9 +1391,19 @@ async function leaveWatch(c: Ctx, depart: Date): Promise<Date | null> {
   const { plan, now, deps, b } = c;
   const p = plan.leave_plan;
   const leaveBy = plan.leave_by ? new Date(plan.leave_by) : null;
-  if (!p || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_worse"))
+  if (!p || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_watched"))
     return null;
   if (now >= leaveBy || !deps.routes.available) return null;
+  if (now.getTime() < leaveBy.getTime() - 15 * MINUTE)
+    return new Date(leaveBy.getTime() - 15 * MINUTE);
+  // Only once.
+  await withUser(
+    deps.sql,
+    c.userId,
+    (tx) => tx`
+    UPDATE flight_plans SET sent = array_append(sent, 'leave_watched')
+    WHERE trip_item_id = ${plan.trip_item_id}`,
+  );
   const to = airport(b.fromCode);
   if (!to) return null;
   const car = await deps.routes
@@ -1364,7 +1418,7 @@ async function leaveWatch(c: Ctx, depart: Date): Promise<Date | null> {
     return null;
   }
   void depart;
-  return new Date(Math.min(leaveBy.getTime(), now.getTime() + 10 * MINUTE));
+  return null;
 }
 
 // What the person does on the card ---------------------------------------------------------------

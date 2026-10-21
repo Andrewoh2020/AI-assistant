@@ -5,7 +5,7 @@ import { airport, instantToLocal, localToInstant } from "./airports.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { FlightStatusSource, LiveFlight, RouteSource } from "./flightdata.js";
-import { factsFor, pickMode, planFlights, readMarker, tickAll } from "./flights.js";
+import { factsFor, nextStatusAt, pickMode, planFlights, readMarker, tickAll } from "./flights.js";
 import { fileBooking } from "./gmail.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 import { bookingFrom } from "./tools.js";
@@ -148,6 +148,27 @@ describe("what a flight needs", () => {
       "car",
     );
     expect(pickMode(null, { mode: "train", minutes: 55 })?.mode).toBe("train");
+  });
+
+  it("looks up live status about 20 times per flight, not every few minutes", () => {
+    const H = 3600000;
+    const depart = 30 * 24 * H;
+    const lands = depart + 17 * H;
+    let now = depart - 10 * 24 * H;
+    let last = 0;
+    const looks: number[] = [];
+    for (;;) {
+      const due = nextStatusAt(last, now, depart, lands, now > depart + 10 * 60000);
+      if (due === null) break;
+      now = Math.max(now, due);
+      looks.push((depart - now) / H);
+      last = now;
+    }
+    expect(looks.length).toBeGreaterThanOrEqual(18);
+    expect(looks.length).toBeLessThanOrEqual(24);
+    // The first look is 3 days out; the last is just after landing.
+    expect(looks[0]).toBe(72);
+    expect(looks.at(-1)).toBeCloseTo(-17.25);
   });
 
   it("reads FlightAware's flight", () => {

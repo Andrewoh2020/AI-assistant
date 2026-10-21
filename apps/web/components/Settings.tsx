@@ -16,6 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "@/lib/client";
+import { TravelPage } from "./TravelSettings";
 
 /**
  * Settings, Muse style: a sheet over the chat with grouped white lists, a centered title and a
@@ -24,7 +25,11 @@ import { api } from "@/lib/client";
  */
 
 type Page =
-  { name: "home" } | { name: "vault" } | { name: "login"; id: string } | { name: "connections" };
+  | { name: "home" }
+  | { name: "vault" }
+  | { name: "login"; id: string }
+  | { name: "connections" }
+  | { name: "travel" };
 
 /** How connecting Gmail went, from Google's sign-in coming back to the app. */
 export type GmailResult = "connected" | "cancelled" | "denied" | "failed" | "unavailable";
@@ -88,7 +93,7 @@ export function Settings({
 
   const login = page.name === "login" ? logins?.find((l) => l.id === page.id) : undefined;
   const back: Page | null =
-    page.name === "vault" || page.name === "connections"
+    page.name === "vault" || page.name === "connections" || page.name === "travel"
       ? { name: "home" }
       : page.name === "home"
         ? null
@@ -100,7 +105,9 @@ export function Settings({
         ? "Secure credentials store"
         : page.name === "connections"
           ? "Connected accounts"
-          : (login?.site ?? "Saved login");
+          : page.name === "travel"
+            ? "Travel details"
+            : (login?.site ?? "Saved login");
 
   return (
     <div className="sheet-scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -162,6 +169,12 @@ export function Settings({
                   }
                   onClick={() => setPage({ name: "connections" })}
                 />
+                <Row
+                  icon={<PlaneIcon />}
+                  label="Travel details"
+                  sub="Passport, seat style, for automatic check-in"
+                  onClick={() => setPage({ name: "travel" })}
+                />
               </div>
               <div className="group">
                 <button type="button" className="row row-danger" onClick={onSignOut}>
@@ -180,6 +193,7 @@ export function Settings({
           {page.name === "connections" && (
             <ConnectionsPage gmail={gmail} result={gmailResult} onChanged={loadGmail} />
           )}
+          {page.name === "travel" && <TravelPage />}
           {page.name === "login" &&
             (login ? (
               <LoginPage
@@ -878,6 +892,10 @@ export const VaultIcon = () =>
     "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3ZM9.5 11.5h5v4h-5v-4ZM10.5 11.5V10a1.5 1.5 0 0 1 3 0v1.5",
   );
 const MailIcon = () => svg("M3.5 6.5h17v11h-17v-11ZM3.5 7l8.5 6.5L20.5 7");
+const PlaneIcon = () =>
+  svg(
+    "M21 15.5v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V8.5l-8 5v2l8-2.5V18l-2 1.5V21l3.5-1 3.5 1v-1.5L13 18v-5z",
+  );
 const ChevronRight = () => <span className="row-chevron">{svg("M9 6l6 6-6 6")}</span>;
 const ChevronLeft = () => svg("M15 6l-6 6 6 6");
 const CloseIcon = () => svg("M6 6l12 12M18 6 6 18");

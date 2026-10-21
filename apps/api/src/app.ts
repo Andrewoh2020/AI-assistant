@@ -107,8 +107,9 @@ export interface AppDeps {
   flightStatus?: FlightStatusSource;
   routes?: RouteSource;
   /**
-   * How often the flight scheduler runs in this process (check-ins, reminders, live status).
-   * Set on a computer that stays on; left out on Vercel, where /cron/flights and app use drive it.
+   * Runs the flight scheduler in this process: it sleeps until a flight next needs something, and
+   * wakes at least this often to look for new booking emails. Set on a computer that stays on;
+   * left out on Vercel, where /cron/flights and opening the app drive it.
    */
   scheduleEveryMs?: number;
   now?: () => Date;
@@ -1043,13 +1044,34 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { ok: true };
   });
 
+  // On a computer that stays on: wake when the next flight needs something, and at least every
+  // `scheduleEveryMs` to look for new booking emails. A wake-up with nothing due costs nothing.
   if (deps.scheduleEveryMs) {
-    const timer = setInterval(
-      () => void tick().catch((err) => app.log.error(err)),
-      deps.scheduleEveryMs,
-    );
-    timer.unref();
-    app.addHook("onClose", async () => clearInterval(timer));
+    const most = deps.scheduleEveryMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const arm = async () => {
+      if (closed) return;
+      let wait = most;
+      try {
+        const [row] = await sql<{ at: Date | null }[]>`SELECT app_next_flight_due() AS at`;
+        const now = (deps.now?.() ?? new Date()).getTime();
+        if (row?.at) wait = Math.min(most, Math.max(5000, new Date(row.at).getTime() - now));
+      } catch (err) {
+        app.log.error(err);
+      }
+      timer = setTimeout(() => {
+        void tick()
+          .catch((err) => app.log.error(err))
+          .finally(() => void arm());
+      }, wait);
+      timer.unref();
+    };
+    void arm();
+    app.addHook("onClose", async () => {
+      closed = true;
+      clearTimeout(timer);
+    });
   }
 
   return app;
