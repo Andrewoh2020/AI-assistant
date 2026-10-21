@@ -192,13 +192,7 @@ function VaultPage({
               key={l.id}
               icon={<SiteBadge site={l.site} />}
               label={l.site}
-              sub={[
-                l.account || "Password only",
-                stateOf(l),
-                l.hasCodeKey ? "2-step key saved" : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
+              sub={[l.account || "Password only", stateOf(l)].filter(Boolean).join(" · ")}
               onClick={() => onPick(l.id)}
             />
           ))
@@ -240,8 +234,6 @@ function LoginPage({
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [codeKey, setCodeKey] = useState("");
-  const [addingKey, setAddingKey] = useState(false);
 
   async function run(work: () => Promise<unknown>, after: () => Promise<void>) {
     setBusy(true);
@@ -302,82 +294,6 @@ function LoginPage({
             }
           />
         </label>
-      </div>
-      <h3 className="group-title">2-step codes</h3>
-      <div className="group">
-        {login.hasCodeKey ? (
-          <div className="row row-static row-confirm">
-            <p>
-              The authenticator key is saved. When {login.site} asks for a 2-step code, the browser
-              makes it and enters it, like your authenticator app would.
-            </p>
-            <div className="row-actions">
-              <button
-                type="button"
-                className="btn btn-small btn-secondary"
-                disabled={busy}
-                onClick={() => void run(() => api.removeVaultCodeKey(login.id), onChanged)}
-              >
-                Remove key
-              </button>
-            </div>
-          </div>
-        ) : addingKey ? (
-          <form
-            className="row row-static row-confirm"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void run(
-                () => api.saveVaultCodeKey(login.id, codeKey),
-                async () => {
-                  setCodeKey("");
-                  setAddingKey(false);
-                  await onChanged();
-                },
-              );
-            }}
-          >
-            <label className="bsign-field">
-              <span>Setup key or otpauth:// link</span>
-              <input
-                value={codeKey}
-                onChange={(e) => setCodeKey(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                required
-                maxLength={1000}
-              />
-            </label>
-            <p className="row-sub">
-              {login.site} shows this when you turn on 2-step sign-in (often under &quot;Can&apos;t
-              scan the QR code?&quot;). This keeps both your password and your 2-step key in one
-              place, so skip it for your most important accounts.
-            </p>
-            <div className="row-actions">
-              <button type="submit" className="btn btn-small btn-accent" disabled={busy}>
-                Save key
-              </button>
-              <button
-                type="button"
-                className="btn btn-small btn-secondary"
-                disabled={busy}
-                onClick={() => setAddingKey(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : (
-          <button type="button" className="row row-nav" onClick={() => setAddingKey(true)}>
-            <span className="row-text">
-              <span className="row-label">Add authenticator key</span>
-              <span className="row-sub">
-                The browser then enters 2-step codes itself instead of asking you.
-              </span>
-            </span>
-            <ChevronRight />
-          </button>
-        )}
       </div>
       <div className="group">
         {confirming ? (
