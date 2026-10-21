@@ -13,9 +13,10 @@ import { api } from "@/lib/client";
 /** How to export from each manager (menus as of late 2026). */
 const STEPS: Record<PasswordManager, string[]> = {
   "Apple Passwords": [
-    "On your Mac, open the Passwords app.",
-    "Choose File › Export All Passwords to File…, then Continue.",
-    "Save the file, then choose it below.",
+    "On your Mac, open the Passwords app and click its window so it's in front.",
+    "In the menu bar at the very top of your screen, click File, then Export All Passwords to File…",
+    "Click Export Passwords, unlock with Touch ID or your Mac password, and save the file to your Desktop.",
+    "Choose that file below.",
   ],
   Chrome: [
     "In Chrome, open chrome://password-manager/settings",

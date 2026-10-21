@@ -885,6 +885,35 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect((await send(cookie, { password: "x" })).statusCode).toBe(409);
   });
 
+  it("asks again once when a reply is cut off, and never shows the half-written one", async () => {
+    const cookie = await signUp();
+    const chat = await mainChatId(cookie);
+    travila.scripts.push(
+      [{ answer: 'The page lands on a "', cutOff: true }],
+      [{ answer: "The page says: You logged into a secure area!" }],
+    );
+    const run = await pollUntilDone(
+      cookie,
+      (await ask(cookie, chat, "What does it say?")).json().run.id,
+    );
+    expect(run.status).toBe("completed");
+    expect(run.message.text).toBe("The page says: You logged into a secure area!");
+    const thread = [...travila.threads.values()].at(-1)!;
+    expect(thread.history.filter((m) => m.role === "ROLE_USER")).toHaveLength(2);
+
+    // Cut off twice: say so instead of showing half an answer.
+    travila.scripts.push(
+      [{ answer: "Half", cutOff: true }],
+      [{ answer: "Half again", cutOff: true }],
+    );
+    const failed = await pollUntilDone(cookie, (await ask(cookie, chat, "Again?")).json().run.id);
+    expect(failed).toMatchObject({
+      status: "failed",
+      error: "The answer was cut off by a connection problem. Try asking again.",
+      message: null,
+    });
+  });
+
   describe("the vault", () => {
     const PASSWORD = "Dummy-Vault-Pw-7731";
 
@@ -1007,6 +1036,31 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       expect(mine).toHaveLength(4);
       const other = await userOf(await signUp());
       expect(await withUser(sql!, other, (tx) => tx`SELECT * FROM audit_events`)).toHaveLength(0);
+    });
+
+    it("blanks a saved password out of the answer, even one the model read off the page", async () => {
+      const cookie = await signUp();
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "tomsmith", password: PASSWORD });
+      await pollUntilDone(cookie, first);
+
+      const chat = await mainChatId(cookie);
+      travila.scripts.push([
+        { answer: `The page lists the demo login tomsmith / ${PASSWORD} for you.` },
+      ]);
+      const run = await pollUntilDone(
+        cookie,
+        (await ask(cookie, chat, "What was it?")).json().run.id,
+      );
+      expect(run.message.text).toBe("The page lists the demo login tomsmith / •••••••• for you.");
+      const [hit] = await sql!<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM messages WHERE parts::text LIKE ${"%" + PASSWORD + "%"}`;
+      expect(hit!.n).toBe(0);
     });
 
     it("says when the site rejects the saved login, and the new one replaces it", async () => {

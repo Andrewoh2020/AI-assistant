@@ -260,6 +260,28 @@ export async function recordResult(
   });
 }
 
+/**
+ * A safety net for answers: any saved password that shows up in `texts` (for example a demo
+ * password the model read off a page and also saved) is blanked out. The passwords stay in here.
+ */
+export async function redactSavedPasswords(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  texts: string[],
+): Promise<string[]> {
+  if (!texts.some(Boolean)) return texts;
+  const passwords = await withVault(sql, userId, async (tx) => {
+    const rows = await tx<CredentialRow[]>`SELECT * FROM vault.credentials`;
+    return rows
+      .map((row) => unseal(vk, context(userId, row.id, row.site), row)?.password ?? "")
+      .filter((p) => p.length >= 4);
+  });
+  // Longest first, so a password that contains another is blanked whole.
+  passwords.sort((a, b) => b.length - a.length);
+  return texts.map((t) => passwords.reduce((out, p) => out.split(p).join("••••••••"), t));
+}
+
 // The Vault page (Settings). Only the person, signed in, reaches these; the assistant has no
 // tool that can change or delete a saved login.
 

@@ -36,7 +36,7 @@ export async function testDatabase(): Promise<Sql | null> {
 
 type Step =
   | { tools: { name: string; args: Record<string, unknown> }[] }
-  | { answer: string; reasoning?: string };
+  | { answer: string; reasoning?: string; cutOff?: boolean };
 
 interface FakeThread {
   userId: string;
@@ -141,7 +141,8 @@ export class FakeTravila implements Travila {
       role: "ROLE_ASSISTANT",
       generatedBy: t.runId!,
       content,
-      finishReason: "stop",
+      // A cut-off reply: the model's connection broke, but Travila still ends the run "completed".
+      finishReason: next.cutOff ? "error" : "stop",
       messageId: this.id("msg"),
       model: "deepseek/fake",
     });
