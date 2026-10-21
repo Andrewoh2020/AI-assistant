@@ -1139,6 +1139,96 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       expect(again.browsers[0].ask).toMatchObject({ problem: null, savedAccount: null });
     });
 
+    it("shows the saved login to its owner, who can change it; the 2-step key stays", async () => {
+      const cookie = await signUp();
+      const other = await signUp();
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in. 3 unread." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "me@example.com", password: PASSWORD });
+      await pollUntilDone(cookie, first);
+      const id = (await app.inject({ method: "GET", url: "/vault", headers: { cookie } })).json()
+        .logins[0].id;
+      const key = "JBSWY3DPEHPK3PXP";
+      await app.inject({
+        method: "POST",
+        url: `/vault/logins/${id}/code-key`,
+        headers: { cookie },
+        payload: { key },
+      });
+
+      const reveal = (c: string) =>
+        app.inject({ method: "POST", url: `/vault/logins/${id}/reveal`, headers: { cookie: c } });
+      const shown = await reveal(cookie);
+      expect(shown.statusCode).toBe(200);
+      expect(shown.headers["cache-control"]).toBe("no-store");
+      expect(shown.json()).toEqual({ username: "me@example.com", password: PASSWORD });
+      const theirs = await reveal(other);
+      expect(theirs.statusCode).not.toBe(200);
+      expect(theirs.body).not.toContain(PASSWORD);
+
+      // Someone else can't change it; the owner can.
+      const edit = (c: string, payload: object) =>
+        app.inject({
+          method: "PUT",
+          url: `/vault/logins/${id}/login`,
+          headers: { cookie: c },
+          payload,
+        });
+      const NEW = "Changed-Pw-4410";
+      expect((await edit(other, { username: "x", password: NEW })).statusCode).not.toBe(200);
+      const changed = await edit(cookie, { username: " me2@example.com ", password: NEW });
+      expect(changed.statusCode).toBe(200);
+      expect(changed.body).not.toContain(NEW);
+      expect((await reveal(cookie)).json()).toEqual({ username: "me2@example.com", password: NEW });
+      const page = (await app.inject({ method: "GET", url: "/vault", headers: { cookie } })).json();
+      expect(page.logins[0]).toMatchObject({
+        account: "me2@example.com",
+        hasCodeKey: true,
+        lastResult: null,
+      });
+      expect(page.activity.slice(0, 3).map((e: { action: string }) => e.action)).toEqual([
+        "viewed",
+        "edited",
+        "viewed",
+      ]);
+
+      // The changed login is what the browser gets next time, and the key still makes codes.
+      const next = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "NEEDS_CODE: Enter the code." },
+        { result: "Signed in. 3 unread." },
+      );
+      await pollUntilDone(cookie, next);
+      const runs = [...browser.runs.values()];
+      expect(runs.at(-2)!.input.secrets).toEqual([
+        { alias: "login_username", value: "me2@example.com", allowedDomains: ["example.com"] },
+        { alias: "login_password", value: NEW, allowedDomains: ["example.com"] },
+      ]);
+      const code = runs.at(-1)!.input.secrets![0]!.value;
+      const parsed = parseTotpKey(key)!;
+      const now = Date.now();
+      expect([-30, 0, 30, 60].map((d) => totp(parsed, new Date(now + d * 1000)))).toContain(code);
+
+      // Two logins for the same site can't end up with the same username.
+      await app.inject({
+        method: "POST",
+        url: "/vault/import",
+        headers: { cookie },
+        payload: {
+          csv: "url,username,password\nhttps://example.com,other@example.com,Other-Pw-1",
+          manager: "Other",
+          indices: [0],
+        },
+      });
+      const clash = await edit(cookie, { username: "other@example.com", password: NEW });
+      expect(clash.statusCode).toBe(409);
+    });
+
     it("imports logins from a password manager's export file", async () => {
       const cookie = await signUp();
       const userId = await userOf(cookie);

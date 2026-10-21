@@ -1463,6 +1463,27 @@ code {
 .row-confirm p {
   margin: 0;
 }
+/* Saved password on the login page: dots until Show. */
+.row-secret {
+  justify-content: space-between;
+  gap: 12px;
+}
+.secret-dots {
+  letter-spacing: 2px;
+}
+.secret-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.secret-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.secret-input input {
+  flex: 1;
+  min-width: 0;
+}
 .row-actions {
   display: flex;
   gap: 8px;

@@ -168,7 +168,9 @@ export interface VaultEvent {
     | "ask_off"
     | "code_saved"
     | "code_removed"
-    | "code_used";
+    | "code_used"
+    | "viewed"
+    | "edited";
   site: string | null;
   account: string | null;
   detail: string | null;
@@ -263,6 +265,11 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     updateVaultLogin: (id: string, input: { askBeforeUse: boolean }) =>
       call<{ ok: true }>("PATCH", `/vault/logins/${id}`, input),
     deleteVaultLogin: (id: string) => call<{ ok: true }>("DELETE", `/vault/logins/${id}`),
+    /** The saved username and password, for the person's own eyes on the Vault page. */
+    revealVaultLogin: (id: string) =>
+      call<{ username: string; password: string }>("POST", `/vault/logins/${id}/reveal`),
+    editVaultLogin: (id: string, login: { username: string; password: string }) =>
+      call<{ ok: true }>("PUT", `/vault/logins/${id}/login`, login),
     /** Saves the site's authenticator key (setup key or otpauth:// link) with the login. */
     saveVaultCodeKey: (id: string, key: string) =>
       call<{ ok: true }>("POST", `/vault/logins/${id}/code-key`, { key }),

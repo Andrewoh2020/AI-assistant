@@ -3,7 +3,6 @@
 import { ApiError, type VaultEvent, type VaultLogin } from "@ai-assistant/api-client";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "@/lib/client";
-import { VaultImport } from "./VaultImport";
 
 /**
  * Settings, Muse style: a sheet over the chat with grouped white lists, a centered title and a
@@ -11,11 +10,7 @@ import { VaultImport } from "./VaultImport";
  * Secure credentials store (the vault); the other rows arrive with their features.
  */
 
-type Page =
-  | { name: "home" }
-  | { name: "vault" }
-  | { name: "login"; id: string }
-  | { name: "import"; key: number };
+type Page = { name: "home" } | { name: "vault" } | { name: "login"; id: string };
 
 export function Settings({
   start = "home",
@@ -70,9 +65,7 @@ export function Settings({
       ? "Settings"
       : page.name === "vault"
         ? "Secure credentials store"
-        : page.name === "import"
-          ? "Import logins"
-          : (login?.site ?? "Saved login");
+        : (login?.site ?? "Saved login");
 
   return (
     <div className="sheet-scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -135,13 +128,12 @@ export function Settings({
               logins={logins}
               activity={activity}
               onPick={(id) => setPage({ name: "login", id })}
-              onImport={() => setPage({ name: "import", key: Date.now() })}
             />
           )}
-          {page.name === "import" && <VaultImport key={page.key} onImported={load} />}
           {page.name === "login" &&
             (login ? (
               <LoginPage
+                key={login.id}
                 login={login}
                 activity={activity.filter(
                   (e) => e.site === login.site && (e.account ?? "") === login.account,
@@ -165,12 +157,10 @@ function VaultPage({
   logins,
   activity,
   onPick,
-  onImport,
 }: {
   logins: VaultLogin[] | null;
   activity: VaultEvent[];
   onPick: (id: string) => void;
-  onImport: () => void;
 }) {
   return (
     <>
@@ -206,14 +196,6 @@ function VaultPage({
             />
           ))
         )}
-      </div>
-      <div className="group">
-        <Row
-          icon={<ImportIcon />}
-          label="Import from a password manager"
-          sub="Apple Passwords, Chrome, 1Password, Bitwarden and more"
-          onClick={onImport}
-        />
       </div>
       {activity.length > 0 && (
         <>
@@ -269,8 +251,8 @@ function LoginPage({
 
   return (
     <>
+      <SignInDetails login={login} onChanged={onChanged} />
       <div className="group">
-        <Detail label="Account" value={login.account || "Password only"} />
         <Detail label="Used on" value={`${login.site} only`} />
         <Detail
           label="Added"
@@ -361,9 +343,8 @@ function LoginPage({
             </label>
             <p className="row-sub">
               {login.site} shows this when you turn on 2-step sign-in (often under &quot;Can&apos;t
-              scan the QR code?&quot;). 1Password, Bitwarden and Apple Passwords also show it for
-              logins with a code. This keeps both your password and your 2-step key in one place, so
-              skip it for your most important accounts.
+              scan the QR code?&quot;). This keeps both your password and your 2-step key in one
+              place, so skip it for your most important accounts.
             </p>
             <div className="row-actions">
               <button type="submit" className="btn btn-small btn-accent" disabled={busy}>
@@ -442,6 +423,186 @@ function LoginPage({
   );
 }
 
+/**
+ * The saved username and password, for the person's own eyes: hidden until they press Show, and
+ * editable. The assistant has no way to read these.
+ */
+function SignInDetails({
+  login,
+  onChanged,
+}: {
+  login: VaultLogin;
+  onChanged: () => Promise<void>;
+}) {
+  const [shown, setShown] = useState<{ username: string; password: string } | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open() {
+    if (shown) return shown;
+    setBusy(true);
+    setError(null);
+    try {
+      const l = await api.revealVaultLogin(login.id);
+      setShown(l);
+      return l;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't open this login. Try again.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    const l = await open();
+    if (!l) return;
+    try {
+      await navigator.clipboard.writeText(l.password);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Couldn't copy. Press Show and copy it yourself.");
+    }
+  }
+
+  async function startEdit() {
+    const l = await open();
+    if (!l) return;
+    setUsername(l.username);
+    setPassword(l.password);
+    setEditing(true);
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.editVaultLogin(login.id, { username, password });
+      setShown({ username: username.trim(), password });
+      setEditing(false);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "That didn't save. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const errorLine = error && (
+    <p className="form-error" role="alert">
+      {error}
+    </p>
+  );
+
+  if (editing) {
+    return (
+      <>
+        <form
+          className="group"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <div className="row row-static row-confirm">
+            <label className="bsign-field">
+              <span>Username or email</span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={1000}
+              />
+            </label>
+            <label className="bsign-field">
+              <span>Password</span>
+              <span className="secret-input">
+                <input
+                  type={visible ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  required
+                  maxLength={1000}
+                />
+                <button type="button" className="bsign-alt" onClick={() => setVisible(!visible)}>
+                  {visible ? "Hide" : "Show"}
+                </button>
+              </span>
+            </label>
+            <div className="row-actions">
+              <button type="submit" className="btn btn-small btn-accent" disabled={busy}>
+                {busy ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-small btn-secondary"
+                disabled={busy}
+                onClick={() => setEditing(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </form>
+        {errorLine}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="group">
+        <Detail label="Username" value={login.account || "None (password only)"} />
+        <div className="row row-static row-secret">
+          <span className="row-text">
+            <span className="row-sub">Password</span>
+            <span className={visible && shown ? "secret-value" : "secret-dots"}>
+              {visible && shown ? shown.password : "••••••••••"}
+            </span>
+          </span>
+          <span className="row-actions">
+            <button
+              type="button"
+              className="bsign-alt"
+              disabled={busy}
+              onClick={async () => {
+                if (visible) return setVisible(false);
+                if (await open()) setVisible(true);
+              }}
+            >
+              {visible ? "Hide" : "Show"}
+            </button>
+            <button type="button" className="bsign-alt" disabled={busy} onClick={() => void copy()}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </span>
+        </div>
+        <button
+          type="button"
+          className="row row-nav"
+          disabled={busy}
+          onClick={() => void startEdit()}
+        >
+          <span className="row-text">
+            <span className="row-label">Edit username or password</span>
+          </span>
+          <ChevronRight />
+        </button>
+      </div>
+      {errorLine}
+    </>
+  );
+}
+
 function Row({
   icon,
   label,
@@ -512,6 +673,10 @@ export function eventText(e: VaultEvent): string {
       return `Removed the authenticator key for ${site}`;
     case "code_used":
       return `Made a 2-step code for ${site}`;
+    case "viewed":
+      return `You viewed the login for ${site}`;
+    case "edited":
+      return `You changed the login for ${site}`;
   }
 }
 
@@ -551,7 +716,6 @@ export const VaultIcon = () =>
   svg(
     "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3ZM9.5 11.5h5v4h-5v-4ZM10.5 11.5V10a1.5 1.5 0 0 1 3 0v1.5",
   );
-const ImportIcon = () => svg("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14");
 const ChevronRight = () => <span className="row-chevron">{svg("M9 6l6 6-6 6")}</span>;
 const ChevronLeft = () => svg("M15 6l-6 6 6 6");
 const CloseIcon = () => svg("M6 6l12 12M18 6 6 18");
