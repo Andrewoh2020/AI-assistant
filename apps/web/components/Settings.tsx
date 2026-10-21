@@ -1,7 +1,14 @@
 "use client";
 
 import { ApiError, type VaultEvent, type VaultLogin } from "@ai-assistant/api-client";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import { api } from "@/lib/client";
 
 /**
@@ -424,8 +431,9 @@ function LoginPage({
 }
 
 /**
- * The saved username and password, for the person's own eyes: hidden until they press Show, and
- * editable. The assistant has no way to read these.
+ * The saved username and password, edited in place like Apple's Passwords app: click a field,
+ * type, and it saves when you leave it (Enter saves too, Escape undoes). The password stays as
+ * dots until it is shown or being edited. The assistant has no way to read these.
  */
 function SignInDetails({
   login,
@@ -434,146 +442,139 @@ function SignInDetails({
   login: VaultLogin;
   onChanged: () => Promise<void>;
 }) {
-  const [shown, setShown] = useState<{ username: string; password: string } | null>(null);
+  // What is saved, once opened; null until the password is first needed.
+  const [saved, setSaved] = useState<{ username: string; password: string } | null>(null);
+  const [username, setUsername] = useState(login.account);
+  const [password, setPassword] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [editingPassword, setEditingPassword] = useState(false);
+  const [status, setStatus] = useState<"saving" | "saved" | "copied" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const opening = useRef<Promise<{ username: string; password: string } | null> | null>(null);
 
-  async function open() {
-    if (shown) return shown;
-    setBusy(true);
+  function open() {
+    if (saved) return Promise.resolve(saved);
+    opening.current ??= api
+      .revealVaultLogin(login.id)
+      .then((l) => {
+        setSaved(l);
+        setPassword((p) => p ?? l.password);
+        return l;
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Couldn't open this login. Try again.");
+        opening.current = null;
+        return null;
+      });
+    return opening.current;
+  }
+
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function flash(next: "saved" | "copied") {
+    setStatus(next);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setStatus(null), 1500);
+  }
+
+  async function save() {
+    const current = await open();
+    if (!current) return;
+    const next = { username: username.trim(), password: password ?? current.password };
+    if (next.username === current.username && next.password === current.password) return;
+    if (!next.password) {
+      setError("The password can't be empty.");
+      setPassword(current.password);
+      return;
+    }
+    setStatus("saving");
     setError(null);
     try {
-      const l = await api.revealVaultLogin(login.id);
-      setShown(l);
-      return l;
+      await api.editVaultLogin(login.id, next);
+      setSaved(next);
+      setUsername(next.username);
+      flash("saved");
+      await onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't open this login. Try again.");
-      return null;
-    } finally {
-      setBusy(false);
+      setStatus(null);
+      setError(err instanceof ApiError ? err.message : "That didn't save. Try again.");
     }
   }
+
+  function undo(field: "username" | "password") {
+    setError(null);
+    if (field === "username") setUsername(saved?.username ?? login.account);
+    else setPassword(saved?.password ?? null);
+  }
+
+  const keys = (field: "username" | "password") => (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") e.currentTarget.blur();
+    if (e.key === "Escape") {
+      // Escape undoes the edit here instead of closing Settings.
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      const input = e.currentTarget;
+      undo(field);
+      // Leave after the undone value is in place, so leaving doesn't save the edit.
+      setTimeout(() => input.blur());
+    }
+  };
 
   async function copy() {
     const l = await open();
     if (!l) return;
     try {
-      await navigator.clipboard.writeText(l.password);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(password ?? l.password);
+      flash("copied");
     } catch {
       setError("Couldn't copy. Press Show and copy it yourself.");
     }
   }
 
-  async function startEdit() {
-    const l = await open();
-    if (!l) return;
-    setUsername(l.username);
-    setPassword(l.password);
-    setEditing(true);
-  }
-
-  async function save() {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.editVaultLogin(login.id, { username, password });
-      setShown({ username: username.trim(), password });
-      setEditing(false);
-      await onChanged();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "That didn't save. Try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const errorLine = error && (
-    <p className="form-error" role="alert">
-      {error}
-    </p>
-  );
-
-  if (editing) {
-    return (
-      <>
-        <form
-          className="group"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
-          <div className="row row-static row-confirm">
-            <label className="bsign-field">
-              <span>Username or email</span>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={1000}
-              />
-            </label>
-            <label className="bsign-field">
-              <span>Password</span>
-              <span className="secret-input">
-                <input
-                  type={visible ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoComplete="new-password"
-                  spellCheck={false}
-                  required
-                  maxLength={1000}
-                />
-                <button type="button" className="bsign-alt" onClick={() => setVisible(!visible)}>
-                  {visible ? "Hide" : "Show"}
-                </button>
-              </span>
-            </label>
-            <div className="row-actions">
-              <button type="submit" className="btn btn-small btn-accent" disabled={busy}>
-                {busy ? "Saving…" : "Save"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-small btn-secondary"
-                disabled={busy}
-                onClick={() => setEditing(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </form>
-        {errorLine}
-      </>
-    );
-  }
-
+  const showText = visible || editingPassword;
   return (
     <>
       <div className="group">
-        <Detail label="Username" value={login.account || "None (password only)"} />
+        <label className="row row-static row-detail row-field">
+          <span className="row-sub">Username</span>
+          <input
+            className="field-inline"
+            value={username}
+            placeholder="None (password only)"
+            onChange={(e) => setUsername(e.target.value)}
+            onBlur={() => void save()}
+            onKeyDown={keys("username")}
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={1000}
+          />
+        </label>
         <div className="row row-static row-secret">
-          <span className="row-text">
+          <label className="row-text row-field">
             <span className="row-sub">Password</span>
-            <span className={visible && shown ? "secret-value" : "secret-dots"}>
-              {visible && shown ? shown.password : "••••••••••"}
-            </span>
-          </span>
+            <input
+              className={`field-inline ${showText ? "secret-value" : "secret-dots"}`}
+              type={showText ? "text" : "password"}
+              value={password ?? "••••••••••"}
+              readOnly={password === null}
+              onFocus={() => {
+                setEditingPassword(true);
+                void open();
+              }}
+              onChange={(e) => setPassword(e.target.value)}
+              onBlur={() => {
+                setEditingPassword(false);
+                void save();
+              }}
+              onKeyDown={keys("password")}
+              autoComplete="new-password"
+              spellCheck={false}
+              maxLength={1000}
+            />
+          </label>
           <span className="row-actions">
             <button
               type="button"
               className="bsign-alt"
-              disabled={busy}
               onClick={async () => {
                 if (visible) return setVisible(false);
                 if (await open()) setVisible(true);
@@ -581,24 +582,23 @@ function SignInDetails({
             >
               {visible ? "Hide" : "Show"}
             </button>
-            <button type="button" className="bsign-alt" disabled={busy} onClick={() => void copy()}>
-              {copied ? "Copied" : "Copy"}
+            <button type="button" className="bsign-alt" onClick={() => void copy()}>
+              Copy
             </button>
           </span>
         </div>
-        <button
-          type="button"
-          className="row row-nav"
-          disabled={busy}
-          onClick={() => void startEdit()}
-        >
-          <span className="row-text">
-            <span className="row-label">Edit username or password</span>
-          </span>
-          <ChevronRight />
-        </button>
       </div>
-      {errorLine}
+      {error ? (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      ) : (
+        status && (
+          <p className="field-status" role="status">
+            {status === "saving" ? "Saving…" : status === "saved" ? "Saved" : "Password copied"}
+          </p>
+        )
+      )}
     </>
   );
 }
