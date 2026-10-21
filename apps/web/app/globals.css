@@ -1475,6 +1475,34 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-wrap: anywhere;
 }
+/* A row whose value is the input itself: plain text until clicked. */
+.row-field {
+  cursor: text;
+}
+.field-inline {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--type-body-size);
+  outline: none;
+}
+.field-inline:focus {
+  box-shadow: 0 1px 0 var(--accent);
+}
+.field-inline::placeholder {
+  color: var(--ink-2);
+}
+.field-status {
+  margin: -6px 16px 14px;
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+}
 .secret-input {
   display: flex;
   align-items: center;
