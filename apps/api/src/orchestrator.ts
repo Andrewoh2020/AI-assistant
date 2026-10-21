@@ -565,6 +565,10 @@ export async function advanceRun(deps: Deps, s: Session, runId: string): Promise
   const last = runMessages.at(-1);
   const answer = last ? textOf(last, "CONTENT_PART_TYPE_TEXT") : "";
 
+  // The model's connection broke mid-reply: Travila ends the run as completed but keeps the
+  // half-written message. Never show that; ask once more, then say what happened.
+  if (last?.finishReason === "error") return retryCutOff(deps, s, run, threadId);
+
   if (!last || !answer) {
     const age = run.started_at ? now.getTime() - new Date(run.started_at).getTime() : 0;
     // Just after sending, Travila may not show the run as active yet.
@@ -582,6 +586,52 @@ export async function advanceRun(deps: Deps, s: Session, runId: string): Promise
   }
 
   return finalizeRun(deps, s, run, runMessages);
+}
+
+const RETRY_NOTE =
+  "(Your last reply was cut off by a connection error before it finished. Give your full reply to my previous message again. Use the tool results you already have; don't run the same tools again unless you need to.)";
+
+/** One automatic retry for a reply cut off by a model error; a second cut-off fails the run. */
+async function retryCutOff(deps: Deps, s: Session, run: RunRow, threadId: string) {
+  const { sql } = deps;
+  const retriedFrom = run.usage?.retriedFrom;
+  // Another poll is starting the retry right now.
+  if (retriedFrom === run.travila_run_id) return runView(deps, s, run);
+  if (retriedFrom) {
+    await updateRun(sql, s, run.id, {
+      status: "failed",
+      error: "The answer was cut off by a connection problem. Try asking again.",
+    });
+    return runView(deps, s, await loadRun(sql, s, run.id));
+  }
+  // Only the first poll to see the cut-off sends the retry.
+  const [claimed] = await withUser(
+    sql,
+    s.userId,
+    (tx) => tx`
+      UPDATE runs SET usage = coalesce(usage, '{}'::jsonb) || ${tx.json({ retriedFrom: run.travila_run_id } as never)},
+        status = 'running', status_line = 'Thinking'
+      WHERE id = ${run.id} AND NOT coalesce(usage ? 'retriedFrom', false)
+        AND status NOT IN ('completed', 'failed', 'cancelled')
+      RETURNING id`,
+  );
+  if (claimed) {
+    console.warn(`run ${run.id}: reply cut off by a model error; asking once more`);
+    try {
+      const travilaRunId = await deps.travila.sendMessage(s.travilaUserId, threadId, RETRY_NOTE);
+      await withUser(
+        sql,
+        s.userId,
+        (tx) => tx`UPDATE runs SET travila_run_id = ${travilaRunId} WHERE id = ${run.id}`,
+      );
+    } catch {
+      await updateRun(sql, s, run.id, {
+        status: "failed",
+        error: "The answer was cut off by a connection problem. Try asking again.",
+      });
+    }
+  }
+  return runView(deps, s, await loadRun(sql, s, run.id));
 }
 
 /** Checks on a running browse call and, once it is finished, sends its result to Travila. */
