@@ -19,6 +19,12 @@ export interface Config {
   googleClientSecret: string;
   /** The site's own address, like "https://example.com"; empty: taken from each request. */
   publicUrl: string;
+  /** FlightAware AeroAPI, for live flight status. Empty: the trip card shows booked times. */
+  flightAwareKey: string;
+  /** Google Maps (Routes API), for traffic in "time to leave". Empty: an hour is allowed. */
+  googleMapsKey: string;
+  /** Vercel sends it to /cron/flights; empty: that route is off. */
+  cronSecret: string;
 }
 
 export function loadConfig(env = process.env): Config {
@@ -44,5 +50,8 @@ export function loadConfig(env = process.env): Config {
     googleClientId: env.GOOGLE_CLIENT_ID ?? "",
     googleClientSecret: env.GOOGLE_CLIENT_SECRET ?? "",
     publicUrl: (env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
+    flightAwareKey: env.FLIGHTAWARE_API_KEY ?? "",
+    googleMapsKey: env.GOOGLE_MAPS_API_KEY ?? "",
+    cronSecret: env.CRON_SECRET ?? "",
   };
 }

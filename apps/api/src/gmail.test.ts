@@ -181,7 +181,11 @@ async function mainMessages(cookie: string) {
   const main = chats.chats.find((c: { kind: string }) => c.kind === "main");
   await settle();
   const chat = await app.inject({ method: "GET", url: `/chats/${main.id}`, headers: { cookie } });
-  return chat.json().messages as { role: string; text: string }[];
+  return chat.json().messages as {
+    role: string;
+    text: string;
+    flight: { flightNumber: string | null } | null;
+  }[];
 }
 
 describe("booking emails", () => {
@@ -290,9 +294,11 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
       }),
     ).rejects.toThrow(/permission denied/);
 
-    // The Main chat gets one note about what was found.
-    const notes = (await mainMessages(cookie)).filter((m) => m.role === "assistant");
+    // The Main chat gets one note about what was found, then the flight's trip card.
+    const said = (await mainMessages(cookie)).filter((m) => m.role === "assistant");
+    const notes = said.filter((m) => !m.flight);
     expect(notes).toHaveLength(1);
+    expect(said.filter((m) => m.flight?.flightNumber === "NH 7")).toHaveLength(1);
     expect(notes[0]!.text).toContain("found 2 upcoming bookings");
     expect(notes[0]!.text).toContain("Park Hyatt Tokyo");
   });

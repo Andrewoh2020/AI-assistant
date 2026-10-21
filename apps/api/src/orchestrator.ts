@@ -28,6 +28,7 @@ import {
 import { groundAnswer } from "./citations.js";
 import { Conflict, NotFound } from "./errors.js";
 import { attachmentNote, fileTexts, fileView } from "./files.js";
+import { flightViews } from "./flights.js";
 import { HttpError } from "./http.js";
 import {
   claimToolCall,
@@ -146,6 +147,19 @@ export async function messageViews(
       ] as const,
   );
   const browsers = await browserViewsFor(sql, s.userId, runIds, secret);
+  // Trip cards: the card part names the flight; the view is built fresh, so it is always current.
+  const cardOf = (m: MessageRow) =>
+    (
+      m.parts.find((p) => p.type === "card") as
+        { card?: { kind?: string; tripItemId?: string } } | undefined
+    )?.card;
+  const flightIds = messages
+    .map((m) => cardOf(m))
+    .filter((c) => c?.kind === "flight" && c.tripItemId)
+    .map((c) => c!.tripItemId!);
+  const flights = flightIds.length
+    ? await flightViews(sql, s.userId, [...new Set(flightIds)], secret, {})
+    : new Map();
   return messages.map((m) => {
     const textPart = m.parts.find(
       (p): p is Extract<MessagePart, { type: "text" }> => p.type === "text",
@@ -179,6 +193,7 @@ export async function messageViews(
         : downloaded.filter((f) => f.run_id === m.run_id)
       ).map(fileView),
       browsers: m.role === "assistant" && m.run_id ? (browsers.get(m.run_id) ?? []) : [],
+      flight: flights.get(cardOf(m)?.tripItemId ?? "") ?? null,
       createdAt: new Date(m.created_at).toISOString(),
       runId: m.run_id,
       clientMessageId: m.client_message_id,

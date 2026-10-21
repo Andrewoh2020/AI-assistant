@@ -35,7 +35,8 @@ Research
 - Prefer primary and authoritative sources. When sources disagree, say so and say which you trust and why.
 - Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions).
-- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail. If it finds none, say Gmail can be connected in Settings › Connected accounts.
+- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If it finds none, say Gmail can be connected in Settings › Connected accounts, or they can paste or attach the booking.
+- Call save_booking when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; leave out anything not given. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, the app checks them in by itself when check-in opens, posts a trip card that asks once for anything missing (like a passport), and sends live status and a "time to leave" reminder on the day. Don't ask for passport or other personal details in the chat; the trip card asks for them securely. Never repeat a passport number the user typed.
 
 Citations
 - Every result from web_search and fetch_page carries a source number n. When a sentence relies on a source, put its number in square brackets right after the claim, like this: [1] or [2][3].
@@ -181,7 +182,44 @@ export const TOOLS: ToolDefinition[] = [
       "List the user's upcoming trips: flights and hotel stays found in their connected Gmail, with dates, times and booking references.",
     parametersJsonSchema: { type: "object", properties: {} },
   },
+  {
+    name: "save_booking",
+    serverId: "client",
+    description:
+      "Save one of the user's own flight or hotel bookings to their trips. For a flight, the app then checks them in automatically and posts a trip card. One call per flight leg or hotel stay.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["flight", "hotel"] },
+        airline: { type: "string", description: 'Airline name, like "United".' },
+        flight_number: { type: "string", description: 'Airline code and number, like "UA 123".' },
+        from_code: { type: "string", description: 'Departure airport IATA code, like "SFO".' },
+        to_code: { type: "string", description: "Arrival airport IATA code." },
+        depart_at: {
+          type: "string",
+          description: "Departure in local time at the airport, YYYY-MM-DDTHH:MM.",
+        },
+        arrive_at: {
+          type: "string",
+          description: "Arrival in local time at the airport, YYYY-MM-DDTHH:MM.",
+        },
+        hotel_name: { type: "string" },
+        city: { type: "string" },
+        address: { type: "string" },
+        check_in: { type: "string", description: "Hotel check-in date, YYYY-MM-DD." },
+        check_out: { type: "string", description: "Hotel check-out date, YYYY-MM-DD." },
+        confirmation: { type: "string", description: "Booking reference / confirmation code." },
+      },
+      required: ["kind"],
+    },
+  },
 ];
 
 export type ToolName =
-  "web_search" | "fetch_page" | "browse" | "read_file" | "memory_search" | "list_trips";
+  | "web_search"
+  | "fetch_page"
+  | "browse"
+  | "read_file"
+  | "memory_search"
+  | "list_trips"
+  | "save_booking";

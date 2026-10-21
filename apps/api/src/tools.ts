@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import type { Booking } from "@ai-assistant/api-client";
 import { withUser, type Sql } from "@ai-assistant/db";
 import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
-import { tripsText, upcomingTrips } from "./gmail.js";
+import { airport } from "./airports.js";
+import { planFlights } from "./flights.js";
+import { fileBooking, tripsText, upcomingTrips } from "./gmail.js";
 import { decide, type Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
@@ -253,6 +256,30 @@ export async function runTool(
       return { trips: tripsText(trips) };
     }
 
+    if (call.name === "save_booking") {
+      const booking = bookingFrom(args);
+      if ("error" in booking) {
+        await finishToolCall(ctx, toolCallId, {
+          status: "failed",
+          decision: "allow",
+          reason: booking.error,
+        });
+        return { error: booking.error };
+      }
+      const isNew = await withUser(ctx.sql, ctx.userId, (tx) =>
+        fileBooking(tx, ctx.userId, { ...booking, status: "confirmed" }, null),
+      );
+      if (booking.kind === "flight") await planFlights({ sql: ctx.sql }, ctx.userId);
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      return {
+        saved: isNew ? "added" : "updated",
+        next:
+          booking.kind === "flight"
+            ? "A trip card for this flight is now in the Main chat. It checks them in by itself when check-in opens and asks there for anything missing."
+            : "Saved to their trips; arrival cards use it as the place they're staying.",
+      };
+    }
+
     // memory_search
     const memories = await deps.travila.searchMemories(ctx.travilaUserId, String(args.query), 5);
     await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
@@ -271,6 +298,62 @@ export async function runTool(
   }
 }
 
+const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A booking from save_booking's arguments, checked; or the problem in a sentence. */
+export function bookingFrom(args: Record<string, unknown>): Booking | { error: string } {
+  const text = (k: string, max = 120) => {
+    const v = args[k];
+    return typeof v === "string" && v.trim() ? v.replace(/\s+/g, " ").trim().slice(0, max) : null;
+  };
+  if (args.kind === "flight") {
+    const fromCode = text("from_code", 3)?.toUpperCase() ?? null;
+    const toCode = text("to_code", 3)?.toUpperCase() ?? null;
+    const departAt = text("depart_at", 16);
+    const arriveAt = text("arrive_at", 16);
+    const number =
+      text("flight_number", 10)
+        ?.toUpperCase()
+        .replace(/^([A-Z0-9]{2})\s*(\d+)$/, "$1 $2") ?? null;
+    if (!fromCode || !airport(fromCode) || !toCode || !airport(toCode)) {
+      return { error: "from_code and to_code must be airport codes like SFO." };
+    }
+    if (!departAt || !LOCAL_TIME.test(departAt) || (arriveAt && !LOCAL_TIME.test(arriveAt))) {
+      return { error: "depart_at and arrive_at must be local times like 2026-11-03T10:30." };
+    }
+    if (number && !/^[A-Z0-9]{2} \d{1,4}$/.test(number)) {
+      return { error: "flight_number must look like UA 123." };
+    }
+    return {
+      kind: "flight",
+      airline: text("airline", 60),
+      flightNumber: number,
+      fromCode,
+      fromCity: airport(fromCode)!.city || null,
+      toCode,
+      toCity: airport(toCode)!.city || null,
+      departAt,
+      arriveAt,
+      confirmation: text("confirmation", 20)?.toUpperCase() ?? null,
+    };
+  }
+  const checkIn = text("check_in", 10);
+  const checkOut = text("check_out", 10);
+  if (!checkIn || !DAY.test(checkIn) || (checkOut && !DAY.test(checkOut))) {
+    return { error: "check_in and check_out must be dates like 2026-11-03." };
+  }
+  return {
+    kind: "hotel",
+    name: text("hotel_name"),
+    city: text("city", 60),
+    address: text("address", 300),
+    checkIn,
+    checkOut,
+    confirmation: text("confirmation", 30),
+  };
+}
+
 /** The status line shown while tools run, in plain words. */
 export function statusLineFor(calls: TravilaToolCall[]): string {
   const searches = calls.filter((c) => c.name === "web_search");
@@ -283,6 +366,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (calls.some((c) => c.name === "read_file")) return "Reading your file";
   if (calls.some((c) => c.name === "memory_search")) return "Checking what I remember";
   if (calls.some((c) => c.name === "list_trips")) return "Checking your trips";
+  if (calls.some((c) => c.name === "save_booking")) return "Saving your booking";
   return "Working";
 }
 

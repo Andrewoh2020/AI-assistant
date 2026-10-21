@@ -27,6 +27,9 @@ export function backend(): Promise<FastifyInstance> {
       browser: new BrowserUseHttp(config.browserUseBase, config.browserUseKey),
       // Lets tool work finish after the poll's response is sent.
       defer: (work) => waitUntil(work),
+      // On a computer that stays on (Andrew's Mac) check-ins and reminders run every minute. On
+      // Vercel, functions sleep between requests: /api/cron/flights and app use drive it instead.
+      scheduleEveryMs: process.env.VERCEL ? undefined : 60_000,
     });
     await instance.ready();
     return instance;
