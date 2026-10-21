@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-Assistant Architecture Plan</title>
+<meta name="description" content="Architecture, data model and roadmap for AI-Assistant, a personal agent modeled on Meta's Muse. Version 2, 2026-10-19.">
+<style>
+:root{
+  --ink:#111827; --ink-2:#4B5563; --bg:#F5F5F7; --surface:#FFFFFF; --line:#D1D5DB; --hair:#E5E7EB;
+  --accent:#0066CC; --accent-soft:rgba(0,102,204,.10); --zone:#EDEDF2; --good:#15803D; --warn:#B45309; --bad:#D70015;
+  --font:-apple-system,BlinkMacSystemFont,Inter,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --ink:#F9FAFB; --ink-2:#A1A1AA; --bg:#0B0B0F; --surface:#16161B; --line:#3F3F46; --hair:#2A2A32;
+    --accent:#4DA3FF; --accent-soft:rgba(77,163,255,.18); --zone:#1C1C22; --good:#4ADE80; --warn:#FBBF24; --bad:#FF6B6B; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.6 var(--font)}
+main{max-width:1040px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+h2{font-size:22px;margin:48px 0 10px;padding-top:12px;border-top:1px solid var(--hair)}
+h3{font-size:17px;margin:28px 0 8px}
+p,li{max-width:78ch}
+a{color:var(--accent)}
+code{font:13px/1.4 var(--mono);background:var(--zone);padding:1px 5px;border-radius:5px}
+pre{font:13px/1.5 var(--mono);background:var(--surface);border:1px solid var(--hair);border-radius:12px;padding:14px 16px;overflow-x:auto}
+.meta{color:var(--ink-2);font-size:14px;margin:0 0 20px}
+.lead{font-size:18px}
+.card{background:var(--surface);border:1px solid var(--hair);border-radius:16px;padding:16px 20px;margin:16px 0}
+.tbl{overflow-x:auto;background:var(--surface);border:1px solid var(--hair);border-radius:14px;margin:12px 0 20px}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--hair)}
+th{font-weight:600;background:var(--zone)}
+tr:last-child td{border-bottom:0}
+td code{white-space:nowrap}
+.tag{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.done{color:var(--good)} .open{color:var(--warn)} .later{color:var(--ink-2)}
+nav.toc{columns:2;column-gap:32px;font-size:15px}
+nav.toc a{text-decoration:none}
+.diagram{background:var(--surface);border:1px solid var(--hair);border-radius:16px;padding:12px;margin:16px 0}
+.diagram svg{width:100%;height:auto;display:block}
+svg .zn{fill:var(--zone);stroke:var(--line);stroke-width:1}
+svg .bx{fill:var(--surface);stroke:var(--line);stroke-width:1.25}
+svg .dash{stroke-dasharray:5 4}
+svg .ac{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+svg .t{fill:var(--ink);font:600 14px var(--font)}
+svg .s{fill:var(--ink-2);font:400 12px var(--font)}
+svg .z{fill:var(--ink-2);font:600 13px var(--font)}
+svg .ar{fill:none;stroke:var(--ink-2);stroke-width:1.25}
+svg .ah{fill:var(--ink-2)}
+@media (max-width:640px){ nav.toc{columns:1} h1{font-size:25px} }
+</style>
+</head>
+<body>
+<main>
+
+<h1>AI-Assistant: Architecture Plan</h1>
+<p class="meta">Version 2 · 2026-10-19 · For Andrew · Repository: <code>Andrewoh2020/AI-assistant</code> · Supersedes the first draft (Claude Doc, same date)</p>
+
+<p class="lead">We build a personal agent modeled on Meta's Muse, web first and mobile second. A TypeScript backend of our own sits between the user and every outside service. Travila runs the agent, Browser Use is the browser, and DeepSeek's Search API, called directly, is the search engine. The first feature we ship is Everyday Q&amp;A, research and explanations, but the architecture and data model below cover every Muse feature, so later features add tables and screens without reworking what exists.</p>
+
+<nav class="toc card" aria-label="Contents">
+<a href="#decisions">1. Decisions so far</a><br>
+<a href="#platform">2. Languages and frameworks</a><br>
+<a href="#system">3. System architecture</a><br>
+<a href="#features">4. Every feature, mapped</a><br>
+<a href="#qa">5. One Q&amp;A turn, step by step</a><br>
+<a href="#data">6. Data model</a><br>
+<a href="#security">7. Security and safety</a><br>
+<a href="#vendors">8. Travila, Browser Use and search</a><br>
+<a href="#design">9. Design system, web and mobile</a><br>
+<a href="#repo">10. Repository, stack, environment</a><br>
+<a href="#roadmap">11. Roadmap and acceptance checks</a><br>
+<a href="#open">12. Open questions</a><br>
+<a href="#sources">13. Sources</a>
+</nav>
+
+<h2 id="decisions">1. Decisions so far</h2>
+<div class="tbl"><table>
+<thead><tr><th>Topic</th><th>Decision</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>Repository</td><td><code>Andrewoh2020/AI-assistant</code> on GitHub (private)</td><td><span class="tag done">Created</span></td></tr>
+<tr><td>Documents</td><td>Plans and specs are HTML files (in <code>/mnt/project-files/architecture/</code> now, in the repo's <code>docs/</code> later), not Markdown</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>First use case</td><td>Everyday Q&amp;A, research and explanations</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Scope of the design</td><td>Architecture and data model cover all features: chat, side chats, group chats, memory, password vault, goals, ideas, Feed, media, connectors, approvals, commerce and travel</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Main model</td><td>DeepSeek through Travila (<code>deepseek/*</code> on the allowlist; exact model ID confirmed in the first test). No GPT-6 Sol (too expensive)</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Backup model</td><td><code>anthropic/claude-sonnet-5</code>, used when DeepSeek fails, until the performance and cost tests decide</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Qwen</td><td>Travila can add Qwen to our allowlist whenever we ask. We request it when the model tests start</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Model choice over time</td><td>Models are picked by testing, not fixed: the same Q&amp;A eval set runs on DeepSeek, Sonnet 5 and Qwen, comparing answer quality, citation accuracy, injection resistance and cost per answer</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Web search</td><td>DeepSeek Search API (and Fetch for pages), called directly with our own DeepSeek key behind our <code>web_search</code> tool, because Travila does not offer it yet (section 8). Brave stays as the alternative backend. DeepSeek's built-in model search is not used</td><td><span class="tag done">Decided</span> <span class="tag open">Needs DeepSeek key</span></td></tr>
+<tr><td>Streaming</td><td>Travila confirmed: poll or use synchronous calls; live text is not supported yet. Replies appear whole, with status lines from tool calls while the agent works</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Reasoning</td><td>Turned on per thread with Travila's <code>reasoning</code> setting (<code>effort</code>, default <code>EFFORT_MEDIUM</code>; <code>exclude: false</code>). It arrives with the finished reply as <code>CONTENT_PART_TYPE_REASONING</code> parts and is shown in a collapsed "How I worked this out" section under the answer, not live. Effort level is part of the model cost tests</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Languages</td><td>TypeScript everywhere: Next.js (web), Expo / React Native (mobile), Node (backend)</td><td><span class="tag done">Decided</span></td></tr>
+<tr><td>Codex leftovers</td><td>Inventory Travila, Browser Use and Vercel, then delete only what Andrew approves (separate cleanup thread)</td><td><span class="tag open">In progress</span></td></tr>
+<tr><td>Cloud environment</td><td><code>Ai-Assistant</code> environment with full network access; Travila, Browser Use and Vercel keys stored as network secrets, never in chat or files</td><td><span class="tag done">Set up</span></td></tr>
+<tr><td>Design system</td><td>Muse's web and mobile design system is the token and component source (warm neutrals, pill buttons, numbered citations); app layout and mobile behavior follow the UI/UX specs. Mobile follows its Part II. Accent: blue, adjusted for contrast (<a href="#design">section 9</a>)</td><td><span class="tag done">Decided</span></td></tr>
+</tbody></table></div>
+
+<h2 id="platform">2. Languages and frameworks</h2>
+<p>Recommendation: TypeScript for all three parts (web, mobile, backend). One language means shared types, one API client and one set of design tokens, and it is the language coding agents are most reliable in.</p>
+<div class="tbl"><table>
+<thead><tr><th>Option</th><th>What it is</th><th>Fit for this project</th></tr></thead>
+<tbody>
+<tr><td><strong>React (Next.js)</strong></td><td>The standard way to build web apps</td><td>Chosen for web. It is not an alternative to Expo: React is for the browser, Expo is React for phones</td></tr>
+<tr><td><strong>Expo (React Native)</strong></td><td>React for iOS and Android, rendering real native controls</td><td>Chosen for mobile. Shares TypeScript, the API client, data types and tokens with the web app. Native controls match the spec's "native, not branded-loud" rule (iOS sheets, system type)</td></tr>
+<tr><td>Flutter</td><td>Google's toolkit in the Dart language, drawing its own pixels</td><td>Good for identical-looking apps, but it is a second language beside the web code, it imitates native controls rather than using them, and its web output is weaker for text selection and accessibility</td></tr>
+<tr><td>Rust</td><td>A fast, memory-safe systems language</td><td>Coding agents can write Rust, but iteration is slower and fixes take more rounds. Our backend mostly waits on Travila, Browser Use and the search API, so Rust's speed buys nothing now. Worth revisiting only for a sandbox or high-throughput component later</td></tr>
+</tbody></table></div>
+
+<h2 id="system">3. System architecture</h2>
+<p>Clients talk only to our backend. The backend holds every key, decides every tool call, and is the only path to Travila, Browser Use, the search API and the open web.</p>
+<div class="diagram">
+<svg viewBox="0 0 960 504" role="img" aria-label="System architecture: clients, our backend, outside services">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah" d="M0 0L10 5L0 10z"/></marker></defs>
+<rect class="zn" x="20" y="20" width="920" height="100" rx="12"/>
+<text class="z" x="36" y="41">Clients</text>
+<rect class="bx" x="40" y="52" width="280" height="56" rx="8"/>
+<text class="t" x="180" y="74" text-anchor="middle">Web app (Next.js), first</text>
+<text class="s" x="180" y="94" text-anchor="middle">Chat, side chats, Goals, Ideas, Feed, Media</text>
+<rect class="bx dash" x="340" y="52" width="280" height="56" rx="8"/>
+<text class="t" x="480" y="74" text-anchor="middle">Mobile app (Expo), later</text>
+<text class="s" x="480" y="94" text-anchor="middle">Same API, tokens and contracts</text>
+<rect class="bx dash" x="640" y="52" width="280" height="56" rx="8"/>
+<text class="t" x="780" y="74" text-anchor="middle">Messaging channels, later</text>
+<text class="s" x="780" y="94" text-anchor="middle">Text and cards only</text>
+
+<rect class="zn" x="20" y="150" width="920" height="226" rx="12"/>
+<text class="z" x="924" y="171" text-anchor="end">Our backend (Node + TypeScript)</text>
+<rect class="bx" x="40" y="186" width="205" height="64" rx="8"/>
+<text class="t" x="142" y="208" text-anchor="middle">Session gate</text>
+<text class="s" x="142" y="226" text-anchor="middle">Sign-in, Travila user id</text>
+<text class="s" x="142" y="241" text-anchor="middle">Ownership check on every id</text>
+<rect class="bx" x="261" y="186" width="205" height="64" rx="8"/>
+<text class="t" x="363" y="208" text-anchor="middle">Run orchestrator</text>
+<text class="s" x="363" y="226" text-anchor="middle">Sends turns, polls runs</text>
+<text class="s" x="363" y="241" text-anchor="middle">Pushes status to clients</text>
+<rect class="ac" x="482" y="186" width="205" height="64" rx="8"/>
+<text class="t" x="584" y="208" text-anchor="middle">Tool runner + policy gate</text>
+<text class="s" x="584" y="226" text-anchor="middle">Allow, deny or ask per call</text>
+<text class="s" x="584" y="241" text-anchor="middle">SSRF block, untrusted fences</text>
+<rect class="bx" x="703" y="186" width="205" height="64" rx="8"/>
+<text class="t" x="805" y="208" text-anchor="middle">Proactive dispatcher</text>
+<text class="s" x="805" y="226" text-anchor="middle">Quiet hours, one offer/topic</text>
+<text class="s" x="805" y="241" text-anchor="middle">Closed topics, mutes, badges</text>
+<rect class="bx" x="40" y="290" width="190" height="64" rx="8"/>
+<text class="t" x="135" y="312" text-anchor="middle">Background worker</text>
+<text class="s" x="135" y="330" text-anchor="middle">Browser runs, job callbacks</text>
+<text class="s" x="135" y="345" text-anchor="middle">Ideas, Feed, briefings</text>
+<rect class="bx" x="246" y="290" width="190" height="64" rx="8"/>
+<text class="t" x="341" y="312" text-anchor="middle">Vault service</text>
+<text class="s" x="341" y="330" text-anchor="middle">Own DB role + KMS key</text>
+<text class="s" x="341" y="345" text-anchor="middle">Logins injected, never shown</text>
+<rect class="bx" x="452" y="290" width="190" height="64" rx="8"/>
+<text class="t" x="547" y="312" text-anchor="middle">Postgres</text>
+<text class="s" x="547" y="330" text-anchor="middle">All app state (section 6)</text>
+<text class="s" x="547" y="345" text-anchor="middle">Row-level security per user</text>
+<rect class="bx" x="658" y="290" width="190" height="64" rx="8"/>
+<text class="t" x="753" y="312" text-anchor="middle">Media + files</text>
+<text class="s" x="753" y="330" text-anchor="middle">Uploads, generated media</text>
+<text class="s" x="753" y="345" text-anchor="middle">Artifacts with source trees</text>
+
+<rect class="bx" x="40" y="420" width="164" height="64" rx="8"/>
+<text class="t" x="122" y="442" text-anchor="middle">Connected apps</text>
+<text class="s" x="122" y="460" text-anchor="middle">Gmail, Calendar, more</text>
+<text class="s" x="122" y="475" text-anchor="middle">via Travila + Pipedream</text>
+<rect class="bx" x="220" y="420" width="164" height="64" rx="8"/>
+<text class="t" x="302" y="442" text-anchor="middle">Travila</text>
+<text class="s" x="302" y="460" text-anchor="middle">Runs, models, memory</text>
+<text class="s" x="302" y="475" text-anchor="middle">Scheduler, approvals</text>
+<rect class="bx" x="400" y="420" width="164" height="64" rx="8"/>
+<text class="t" x="482" y="442" text-anchor="middle">Browser Use</text>
+<text class="s" x="482" y="460" text-anchor="middle">Cloud browser + files</text>
+<text class="s" x="482" y="475" text-anchor="middle">Live view, profiles</text>
+<rect class="bx" x="580" y="420" width="164" height="64" rx="8"/>
+<text class="t" x="662" y="442" text-anchor="middle">Search API</text>
+<text class="s" x="662" y="460" text-anchor="middle">DeepSeek Search</text>
+<text class="s" x="662" y="475" text-anchor="middle">Brave as backup</text>
+<rect class="bx" x="760" y="420" width="164" height="64" rx="8"/>
+<text class="t" x="842" y="442" text-anchor="middle">Open web</text>
+<text class="s" x="842" y="460" text-anchor="middle">Plain HTTPS fetch</text>
+<text class="s" x="842" y="475" text-anchor="middle">Text extracted</text>
+
+<path class="ar" d="M180 108V168H142V186" marker-end="url(#ah)"/>
+<path class="ar" d="M245 218H261" marker-end="url(#ah)"/>
+<path class="ar" d="M466 218H482" marker-end="url(#ah)"/>
+<path class="ar" d="M805 186V120" marker-end="url(#ah)"/>
+<path class="ar" d="M444 250V388H302V420" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path class="ar" d="M226 354V420" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path class="ar" d="M220 452H204" marker-end="url(#ah)"/>
+<path class="ar" d="M650 250V398H482V420" marker-end="url(#ah)"/>
+<path class="ar" d="M650 398H662V420" marker-end="url(#ah)"/>
+<path class="ar" d="M662 398H842V420" marker-end="url(#ah)"/>
+<text class="s" x="188" y="140">HTTPS</text>
+<text class="s" x="813" y="140">notifications</text>
+<text class="s" x="310" y="381">turns, tool calls</text>
+<text class="s" x="218" y="400" text-anchor="end">job callbacks</text>
+<text class="s" x="658" y="391">search, fetch, browse</text>
+</svg>
+</div>
+
+<div class="tbl"><table>
+<thead><tr><th>Component</th><th>Job</th><th>Muse equivalent</th></tr></thead>
+<tbody>
+<tr><td>Session gate</td><td>Signs users in, maps each user to a Travila end user, checks that every chat, goal, file or job id in a request belongs to that user</td><td>Per-user VM boundary</td></tr>
+<tr><td>Run orchestrator</td><td>Assembles each turn (agent profile, time grounding, tool list), sends it to Travila, polls the run, pushes status and the final reply to the client</td><td>Hatch daemon, per-turn context assembly (PRD 16.3)</td></tr>
+<tr><td>Tool runner + policy gate</td><td>Runs every client tool the model asks for; decides allow, deny or ask; blocks private-network destinations; wraps results as untrusted content; logs sources</td><td>Sentinel + privsep workers</td></tr>
+<tr><td>Proactive dispatcher</td><td>The only path for unprompted messages. Enforces the 09:00 to 21:30 window, one offer per topic, closed topics, per-goal mute and badge rules</td><td>Proactivity rules (PRD 6, specs 12)</td></tr>
+<tr><td>Background worker</td><td>Long work off the request path: Browser Use runs, Travila scheduler callbacks, idea and Feed generation, goal briefings, nightly memory synthesis</td><td>Background execution, crons and hooks</td></tr>
+<tr><td>Vault service</td><td>Stores site credentials encrypted under its own key and database role; hands out one-time references; injects values into Browser Use only at the point of need</td><td>hatch-authd, Secure credentials store</td></tr>
+<tr><td>Postgres</td><td>All app state in section 6, with row-level security keyed on user id</td><td>Postgres</td></tr>
+<tr><td>Media + files</td><td>Uploads, browser downloads, generated media and artifacts, each artifact with an editable source tree</td><td>Workspace, Media tab, <code>.src/</code> trees</td></tr>
+</tbody></table></div>
+
+<h2 id="features">4. Every feature, mapped</h2>
+<p>Each row is a feature from the PRD or design specs: where it lives on screen, what runs it, which outside service helps, and when it ships. Q&amp;A ships first; the rest reuse the same backend.</p>
+<div class="tbl"><table>
+<thead><tr><th>Feature</th><th>Screens</th><th>Our backend</th><th>Outside service</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td>Everyday Q&amp;A and research</td><td>Main chat, Sources in detail pane</td><td>Orchestrator, tool runner (<code>web_search</code>, <code>fetch_page</code>, <code>browse</code>, <code>memory_search</code>)</td><td>Travila, DeepSeek Search, Browser Use</td><td><span class="tag done">1</span></td></tr>
+<tr><td>Main chat</td><td>Chat home, composer, cards</td><td>Orchestrator, messages store</td><td>Travila threads</td><td><span class="tag done">1</span></td></tr>
+<tr><td>Side chats (clean rooms)</td><td>Chat list, per-chat thread</td><td>One Travila thread per chat; <code>clean_room</code> flag stops Main context from being injected</td><td>Travila threads</td><td><span class="tag done">1</span></td></tr>
+<tr><td>Memory and preferences</td><td>Settings › Data controls, "why do you know this"</td><td>Memory mirror (source, supersedes), forget flow, nightly alignment synthesis</td><td>Travila memory</td><td><span class="tag done">1–2</span></td></tr>
+<tr><td>People and groups pages</td><td>Shown through chat answers</td><td>People and groups tables</td><td>Travila memory</td><td><span class="tag later">2</span></td></tr>
+<tr><td>Files and artifacts</td><td>Artifact preview card, viewer, detail pane</td><td>Media + files, artifact source trees</td><td>Travila storage, Browser Use workspaces</td><td><span class="tag later">2</span></td></tr>
+<tr><td>Password vault</td><td>Settings › Secure credentials store, capture page, verification-code card</td><td>Vault service, credential references</td><td>Browser Use profiles and domain secrets</td><td><span class="tag later">3</span></td></tr>
+<tr><td>Permissions and approvals</td><td>Approval card, Settings › Permissions</td><td>Policy gate, grants (one-time, session, task, time-bound, perpetual)</td><td>Travila tool approvals</td><td><span class="tag later">3</span></td></tr>
+<tr><td>Connectors</td><td>Settings › Connectors, connect-in-place card</td><td>Connector accounts and health checks</td><td>Travila connected apps (Pipedream), custom MCP servers</td><td><span class="tag later">3</span></td></tr>
+<tr><td>Goals</td><td>Goals tab, goal detail, files, briefings</td><td>Goals, progress, jobs; worker writes briefings</td><td>Travila scheduler</td><td><span class="tag later">4</span></td></tr>
+<tr><td>Scheduled watches (crons, hooks)</td><td>Inside goals</td><td>Jobs with watermarks and saved instructions</td><td>Travila scheduler, webhooks</td><td><span class="tag later">4</span></td></tr>
+<tr><td>Proactive messages</td><td>Main chat, push</td><td>Proactive dispatcher</td><td>Travila notifications</td><td><span class="tag later">4</span></td></tr>
+<tr><td>Ideas</td><td>Ideas tab, "Let's do it", dismiss</td><td>Worker generates; idea lifecycle and expiry</td><td>Travila scheduler, agent profile "idea writer"</td><td><span class="tag later">5</span></td></tr>
+<tr><td>Feed</td><td>Feed tab, Feed prompt setting</td><td>Worker writes posts on schedule</td><td>Travila scheduler, agent profile "feed writer"</td><td><span class="tag later">5</span></td></tr>
+<tr><td>Media</td><td>Media tab, viewer with lineage</td><td>Media items with parent links</td><td>Image and video generation provider (to choose)</td><td><span class="tag later">5</span></td></tr>
+<tr><td>Group chats</td><td>Chat with participants</td><td>Chat participants, per-sender metadata</td><td>Travila threads</td><td><span class="tag later">5</span></td></tr>
+<tr><td>Shopping, travel, reservations</td><td>Product, trip and approval cards</td><td>Orders, trips, approvals; skills as agent profiles</td><td>Browser Use, connectors, Stripe Link</td><td><span class="tag later">6</span></td></tr>
+<tr><td>Plan and usage</td><td>Settings plan card</td><td>Usage roll-up per user, weekly reset</td><td>Travila usage and cost</td><td><span class="tag later">4</span></td></tr>
+<tr><td>Mobile app</td><td>Same IA as web</td><td>Same API</td><td>Expo push</td><td><span class="tag later">after 2</span></td></tr>
+<tr><td>Messaging channels</td><td>WhatsApp, Messenger, SMS</td><td>Channel adapters into the same chats</td><td>Travila voice, media and channels (preview)</td><td><span class="tag later">7</span></td></tr>
+</tbody></table></div>
+
+<h3>Skills and subagents</h3>
+<p>Muse's skills (54 playbooks) map to Travila agent profiles plus prompt fragments: a small always-loaded core and a searchable catalog loaded on demand. Subagents (research fan-out, artifact builds, the browser agent) are separate profiles that run their own Travila threads, never talk to the user, and return one report to the main run. Depth is limited to one level of delegation.</p>
+
+<h2 id="qa">5. One Q&amp;A turn, step by step</h2>
+<ol>
+<li>The user sends a question. The session gate confirms who they are and that the chat is theirs.</li>
+<li>The orchestrator sends the turn to Travila (<code>send-message</code>) with the user's Travila id, the main agent profile, the current date table in the user's timezone, and the tool list. Travila adds relevant memories automatically.</li>
+<li>The model asks for a tool, for example <code>web_search</code>. The run pauses with <code>AGENT_STATUS_AWAITING_CLIENT_TOOLS</code>; the orchestrator hands the call to the tool runner.</li>
+<li>The policy gate checks the call, runs it (DeepSeek Search for search, a plain HTTPS fetch or DeepSeek Fetch for pages), wraps results as EXTERNAL CONTENT, and records each URL in <code>sources</code>.</li>
+<li>If a page needs JavaScript, a login, an upload or a download, the model calls <code>browse</code>; the worker starts a Browser Use run and the live view appears in the detail pane.</li>
+<li>Results go back to Travila (<code>submit-client-tool-results</code>); steps 3 to 5 repeat until the run completes. The client shows status lines ("Searching", "Reading 3 pages").</li>
+<li>The reply arrives whole. Text parts become the answer; reasoning parts (picked by <code>type</code>, not position) go in the collapsed "How I worked this out" section and are shown as plain text with no clickable links. Any URL not in that run's sources is removed and logged; numbered citations sit beside each claim with a Sources list at the end of the answer; facts the user stated are saved to memory.</li>
+</ol>
+<p>Why we run search ourselves: a model only knows what it learned in training, cannot see today's web, and cannot cite a page it has not read. Travila documents no built-in search tool, and Browser Use would need a full browser session for each search, which is slower and costs more. A search API returns results in one call; Browser Use is kept for pages that need a real browser.</p>
+
+<h2 id="data">6. Data model</h2>
+<p>The full schema is designed now; each phase's migration adds the tables it needs, so ids and relations never change later. Every table has <code>id</code> (UUID), <code>created_at</code> and, unless noted, <code>user_id</code> with row-level security. Phase numbers match section 4.</p>
+
+<h3>Identity and settings</h3>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>users</code></td><td>auth_subject, display_name, email, timezone (IANA), locale, travila_user_id, proactive_window_start, proactive_window_end, feed_prompt</td><td>1</td></tr>
+<tr><td><code>user_settings</code></td><td>appearance (system, light, dark), notification prefs (JSON), language_match, bluntness</td><td>1</td></tr>
+<tr><td><code>devices</code></td><td>platform, push_token, paired_at, last_seen_at</td><td>after 2</td></tr>
+<tr><td><code>plans</code>, <code>usage_periods</code></td><td>plan name; period start, reset_at, tokens_used, cost, percent_used</td><td>4</td></tr>
+</tbody></table></div>
+
+<h3>Conversation</h3>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>chats</code></td><td>kind (main, side, group), title, travila_thread_id, clean_room, pinned, archived_at</td><td>1</td></tr>
+<tr><td><code>chat_participants</code></td><td>chat_id, user_id or external contact, role</td><td>5</td></tr>
+<tr><td><code>messages</code></td><td>chat_id, role (user, assistant, system), sender_user_id, parts (JSON: text, reasoning, card, artifact ref, approval ref, attachment ref), travila_message_id, run_id, origin (reply, proactive, correction), language</td><td>1</td></tr>
+<tr><td><code>runs</code></td><td>chat_id, travila_run_id, status, model, profile_version, started_at, finished_at, reasoning_effort, usage (JSON, incl. reasoning tokens), error</td><td>1</td></tr>
+<tr><td><code>tool_calls</code></td><td>run_id, travila_tool_call_id, tool, args (JSON), policy_decision (allow, deny, ask), decision_reason, status, tainted, started_at, finished_at</td><td>1</td></tr>
+<tr><td><code>sources</code></td><td>run_id, tool_call_id, url, title, fetched_at, content_hash, origin (search, fetch, browse), injection_flag</td><td>1</td></tr>
+<tr><td><code>attachments</code></td><td>message_id, file_id</td><td>2</td></tr>
+</tbody></table></div>
+
+<h3>Memory</h3>
+<p>Travila holds the memories and does retrieval. We keep a mirror because Travila has no source, supersession or bulk-delete fields, and Muse's "explain" and "forget" need all three.</p>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>memory_entries</code></td><td>travila_memory_id, type (fact, preference, decision, commitment), text, source_message_id, supersedes_id, forgotten_at</td><td>1</td></tr>
+<tr><td><code>alignment_digests</code></td><td>body, generated_at (nightly summary of how this user wants to be treated)</td><td>2</td></tr>
+<tr><td><code>people</code>, <code>groups</code>, <code>group_members</code></td><td>name, closeness_rank, facts (JSON), notes</td><td>2</td></tr>
+<tr><td><code>closed_topics</code></td><td>topic, closed_at, reopened_at, source_message_id</td><td>2</td></tr>
+<tr><td><code>shopping_profiles</code></td><td>sizes (by category, brand, wearer), brands, budget habits, delivery prefs (no card data)</td><td>6</td></tr>
+</tbody></table></div>
+
+<h3>Goals, jobs, ideas and Feed</h3>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>goals</code></td><td>slug, title, status (active, completed), parent_goal_id (one level only), muted, completed_at</td><td>4</td></tr>
+<tr><td><code>goal_progress</code></td><td>goal_id, entry_date, text (outcomes, not activity)</td><td>4</td></tr>
+<tr><td><code>briefings</code></td><td>goal_id, body, generated_at, read_at</td><td>4</td></tr>
+<tr><td><code>jobs</code></td><td>goal_id (nullable), kind (cron, hook), schedule, travila_schedule_id, instructions (saved verbatim), last_run_at, watermark (JSON), approved_by_message_id</td><td>4</td></tr>
+<tr><td><code>job_runs</code></td><td>job_id, travila_execution_id, outcome (new, unchanged, failed), surfaced_message_id</td><td>4</td></tr>
+<tr><td><code>notifications</code></td><td>kind, ref_type, ref_id, channel, sent_at, suppressed_reason (quiet hours, muted, closed topic, already offered)</td><td>4</td></tr>
+<tr><td><code>ideas</code></td><td>title, rationale, status (shown, built, dismissed, expired), origin_refs (JSON), expires_at, built_ref</td><td>5</td></tr>
+<tr><td><code>feed_posts</code></td><td>body, media_file_id, origin_idea_id, published_at</td><td>5</td></tr>
+</tbody></table></div>
+
+<h3>Files, artifacts and media</h3>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>files</code></td><td>kind (upload, generated, artifact, browser_download), storage (travila, browser_use_workspace, own), storage_key, mime, bytes, sha256</td><td>2</td></tr>
+<tr><td><code>artifacts</code></td><td>title, format (html, pdf, pptx, csv…), current_file_id, source_tree_key, chat_id or goal_id</td><td>2</td></tr>
+<tr><td><code>media_items</code></td><td>file_id, prompt, source (generated, upload, library), parent_media_id (lineage), surface_type</td><td>5</td></tr>
+</tbody></table></div>
+
+<h3>Vault, permissions, approvals and connectors</h3>
+<p>Vault tables live in a separate schema reachable only by the vault service's database role. The agent and the main API never read them.</p>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>vault.credentials</code></td><td>origin (HTTPS), username_hint, secret_ciphertext, key_id, created_via (capture page), last_used_at</td><td>3</td></tr>
+<tr><td><code>vault.credential_refs</code></td><td>credential_id, origin, challenge_id, expires_at, used_at (the opaque <code>[credential:&lt;uuid&gt;]</code> the agent handles)</td><td>3</td></tr>
+<tr><td><code>approvals</code></td><td>run_id, tool_call_id, travila_tool_call_id, payload (verbatim JSON shown on the card), status (pending, approved, rejected, expired), decided_at</td><td>3</td></tr>
+<tr><td><code>permission_grants</code></td><td>scope (one_time, session, task, time_bound, perpetual), target (tool, connector or destination), expires_at, from_approval_id, revoked_at</td><td>3</td></tr>
+<tr><td><code>connector_accounts</code></td><td>provider, travila_account_ref, status (connected, not_connected, error), last_health_check_at</td><td>3</td></tr>
+<tr><td><code>browser_sessions</code></td><td>bu_session_id, bu_browser_id, bu_profile_id, bu_workspace_id, status, live_view_url (encrypted), user_took_over_at</td><td>1</td></tr>
+</tbody></table></div>
+
+<h3>Commerce and travel</h3>
+<div class="tbl"><table>
+<thead><tr><th>Table</th><th>Key fields</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td><code>orders</code></td><td>merchant, items (JSON), delivered_total, currency, approval_id, merchant_order_ref (copied verbatim), tracking</td><td>6</td></tr>
+<tr><td><code>price_watches</code></td><td>product ref, target price, job_id</td><td>6</td></tr>
+<tr><td><code>trips</code>, <code>trip_items</code></td><td>status; item kind (idea, choice, booking), date, details, confirmation_ref, documents_needed</td><td>6</td></tr>
+</tbody></table></div>
+
+<h2 id="security">7. Security and safety</h2>
+<p>Safety lives in deterministic code outside the model, as in Muse, scaled to what a web app with outside vendors can enforce.</p>
+<div class="tbl"><table>
+<thead><tr><th>Muse mechanism</th><th>Our version</th><th>How to check it</th></tr></thead>
+<tbody>
+<tr><td>Per-user VM</td><td>Per-user scoping: Travila <code>X-On-Behalf-Of</code>, Postgres row-level security, one Browser Use profile and workspace per user. No shell or code execution until a later phase</td><td>User B requesting user A's chat gets 403 before any Travila call</td></tr>
+<tr><td>hatch-authd, surrogate credentials</td><td>Vendor keys only in server environment variables; site logins in the vault service; the model only sees <code>[credential:&lt;uuid&gt;]</code> references</td><td><code>pnpm check:secrets</code> in CI; a vault test proves the main API role cannot read <code>vault.*</code></td></tr>
+<tr><td>Sentinel: allow, deny, ask</td><td>Policy gate per tool; unknown tools denied; <code>ask</code> creates an approval card</td><td>Unit test per rule</td></tr>
+<tr><td>Egress checks, SSRF block</td><td><code>fetch_page</code> resolves DNS first and refuses private, loopback and link-local addresses and cross-host redirects</td><td>Fetches of <code>169.254.169.254</code>, <code>10.0.0.1</code> and a redirect to localhost all fail</td></tr>
+<tr><td>Untrusted data labeled</td><td>All tool output fenced as EXTERNAL CONTENT; data never becomes instructions (PRD 16.5)</td><td>Planted-instruction fixture page is skipped and flagged</td></tr>
+<tr><td>Classifier ensemble</td><td>A separate classifier pass on fetched text (phase 2)</td><td>Fixture set scored in evals</td></tr>
+<tr><td>Approval in a UI dialog</td><td>Approval card bound to Travila tool approvals, exact payload shown</td><td>From phase 3</td></tr>
+<tr><td>Identifier grounding</td><td>Every URL, name or order number in a reply must come from that run's tool results or the conversation</td><td>A reply with an invented URL renders without it</td></tr>
+<tr><td>Browser take-over</td><td>Live view in the detail pane, owner only; agent pauses during take-over</td><td>A second user cannot open the first user's live view</td></tr>
+</tbody></table></div>
+
+<h2 id="vendors">8. Travila, Browser Use and search</h2>
+<h3>Travila (used wherever it fits)</h3>
+<div class="tbl"><table>
+<thead><tr><th>Travila service</th><th>Our use</th><th>Phase</th></tr></thead>
+<tbody>
+<tr><td>Conversation threads and runs</td><td>Every chat; secret key plus <code>X-On-Behalf-Of</code> from our backend</td><td>1</td></tr>
+<tr><td>Model routing</td><td>DeepSeek main, <code>anthropic/claude-sonnet-5</code> as backup (the <code>models</code> fallback list); Qwen added on request for testing</td><td>1</td></tr>
+<tr><td>Agent profiles, prompt fragments</td><td>Main agent, browser agent, research subagent, idea writer, Feed writer; skills as fragments</td><td>1</td></tr>
+<tr><td>Client tools</td><td>All research and action tools, run by our tool runner</td><td>1</td></tr>
+<tr><td>Memory</td><td>Per-user memory, automatic retrieval</td><td>1</td></tr>
+<tr><td>Storage</td><td>Uploads and artifacts</td><td>2</td></tr>
+<tr><td>Tool approvals</td><td>Approval cards</td><td>3</td></tr>
+<tr><td>Connected apps (Pipedream), custom MCP servers</td><td>Gmail, Calendar and other connectors</td><td>3</td></tr>
+<tr><td>Scheduler, webhooks, notifications</td><td>Goal jobs, watches, ideas, Feed, proactive messages</td><td>4–5</td></tr>
+<tr><td>Evals, usage and cost</td><td>Quality gates on every pull request; plan card</td><td>1–4</td></tr>
+<tr><td>Voice, media and channels (preview)</td><td>Messaging channels, voice</td><td>7</td></tr>
+</tbody></table></div>
+<p>Not available from Travila today, per its docs and Travila's own answer: word-by-word streaming (we poll), a web search tool (we run our own), Qwen models (Travila adds them on request), bulk memory deletion (our forget flow deletes record by record), and per-user secret storage (Travila secrets are per project, so user passwords go in our vault).</p>
+
+<h3>Browser Use</h3>
+<ul>
+<li>API v4 at <code>https://api.browser-use.com/api/v4</code>, key in <code>X-Browser-Use-API-Key</code>, read from <code>BROWSER_USE_API_KEY</code>.</li>
+<li>Used only when a plain fetch is not enough: JavaScript pages, logins, uploads, downloads, multi-step flows.</li>
+<li>One profile (cookies, sign-ins) and one workspace (input and output files) per user. Download links expire after 60 seconds, so the worker copies results into our files store immediately.</li>
+<li>Live view URL shown only to its owner and treated as a credential.</li>
+<li>Chosen over Browserbase (cannot accept uploaded input files) and Firecrawl (downloads disappear when the session ends).</li>
+</ul>
+
+<h3>Search: DeepSeek Search API (direct), Brave as backup</h3>
+<p>DeepSeek offers web search in two ways. We use the second.</p>
+<ul>
+<li><strong>Built into the model</strong> (a server-side <code>web_search</code> tool in DeepSeek's own Responses API at <code>api.deepseek.com</code>). Not used: it only works with <code>deepseek-v4-pro</code> and is ignored by Flash, Travila sends our turns through its own API so there is no documented way to switch it on, it would bypass our policy gate and source log, and the Sonnet backup would lose search whenever it takes over.</li>
+<li><strong>Standalone Search and Fetch APIs</strong> (released 2026-10-17). Search returns title, URL, summaries, optional full text, publish date and an authority rating, 1 to 50 results per query (queries up to 128 characters). Fetch returns one page as Markdown. About $0.75 per 1,000 successful calls each; empty results and failures are free; 5 requests per second each. Decided: we use these (Andrew, 2026-10-19). Every query still passes our policy gate, every URL lands in <code>sources</code>, and search works no matter which model answers.</li>
+</ul>
+<p><strong>How we call it (decided 2026-10-19).</strong> Travila does not offer DeepSeek Search today (Ian: "a good request, we'll discuss it"). So our tool runner calls DeepSeek directly with our own key:</p>
+<ul>
+<li>Search: <code>POST https://api.deepseek.com/v1/tools/search</code> with <code>query</code> (up to 128 characters, supports <code>site:</code>, <code>after:</code>, <code>before:</code>), <code>count</code> (1 to 50, default 10), optional <code>ori_question</code> and <code>need_content</code>. Each result has title, URL, snippet, summary, optional content, date, site name, <code>authority</code> (0 to 4) and <code>rerank_score</code> (0 to 3; 1.5 and up is high quality).</li>
+<li>Fetch: <code>POST https://api.deepseek.com/v1/tools/fetch</code> with <code>url</code>; returns title and Markdown. DeepSeek's servers do the fetching, so private-network (SSRF) risk stays off our infrastructure; the policy gate still checks the URL first.</li>
+<li>Auth: <code>Authorization: Bearer &lt;key&gt;</code>, held as a network secret for <code>api.deepseek.com</code>, never in code or chat. Limits: 5 requests per second each, HTTP 429 when exceeded, so the tool runner queues and retries.</li>
+<li>Trade-off: search is billed by DeepSeek, not through Travila. If Travila adds it later, we switch the backend behind <code>web_search</code> without touching anything else.</li>
+</ul>
+
+<p>Queries pass the policy gate's discretion check so private details from memory are not sent to the search engine. The search backend sits behind one interface, so switching to Brave is a configuration change, and the evals compare both.</p>
+
+<h2 id="design">9. Design system, web and mobile</h2>
+<p>Source of truth for tokens and components: <a href="../design/muse-web-design-system.html">Muse Web &amp; Mobile Design System</a> (from Muse, 2026-10-19; sections 0 to 10 web, M1 to M10 mobile), with the Muse UI/UX Design Specs for app structure and Settings. Where the two disagree, the table below records our choice. One token set serves web and mobile.</p>
+<div class="tbl"><table>
+<thead><tr><th>Topic</th><th>UI/UX Design Specs (iOS-based)</th><th>Web Design System</th><th>Our choice</th></tr></thead>
+<tbody>
+<tr><td>Accent colour</td><td>Blue <code>#0A84FF</code> (blue role observed in iOS Settings; hex estimated)</td><td>Violet <code>#5B4BD6</code> (recommended, not observed)</td><td><span class="tag done">Blue (Andrew, 2026-10-19)</span> Light mode <code>#0066CC</code> with white text; dark mode <code>#4DA3FF</code> with dark text. Plain <code>#0A84FF</code> fails AA contrast for text on light backgrounds (3.65:1), so these are the nearest blues that pass (5.57:1 and 6.84:1)</td></tr>
+<tr><td>Neutrals</td><td>Cool grays (<code>#EDEDF2</code>, ink <code>#111827</code>)</td><td>Warm neutrals (<code>#FAF9F7</code>, ink <code>#1A1A18</code>)</td><td>Warm neutrals from the web system, both platforms</td></tr>
+<tr><td>Buttons</td><td>Filled, radius 12 to 14</td><td>Pill, 10×18 padding, 15 px semibold</td><td>Pill (web system; marked observed pattern)</td></tr>
+<tr><td>Radius</td><td>Cards 20 to 24, sheets 28 to 32</td><td>8 / 12 / 18, pill 999</td><td>8 / 12 / 18 / pill; iOS sheets keep the native large top radius</td></tr>
+<tr><td>Elevation</td><td>No shadow on list cards</td><td>Soft shadow on resting cards, stronger on modals and approval cards</td><td>Web system's two shadows</td></tr>
+<tr><td>Type</td><td>System stack, body 16 / 1.6</td><td>System stack, scale 34 / 28 / 23 / 17 / 16 / 14 / 12</td><td>Web system's scale; no webfonts</td></tr>
+<tr><td>Layout</td><td>Breakpoints 430 and 1024; sidebar, main, detail pane</td><td>Content 1020 max, chat column about 760; single column under 720</td><td>App shell uses 430 / 1024 (sidebar and detail pane); content stacks under 720; chat column 760</td></tr>
+<tr><td>Touch target</td><td>44 pt minimum</td><td>Web 40 minimum, 44 preferred; mobile 44 pt (iOS) / 48 dp (Android)</td><td>44 on web; 44 pt / 48 dp on mobile, 8 px gap between targets</td></tr>
+<tr><td>Mobile type and shape</td><td>iOS system styles</td><td>Body 17, caption 13, radius 12 / 16 / 22, list rows 52 high, buttons in sheets full width and 50 high</td><td>Mobile system as written (section M3, M8); Dynamic Type up to 200%</td></tr>
+<tr><td>Mobile navigation</td><td>Tabs not specified</td><td>Tab bar, 4 tabs max: Chat, Feed, Goals, Library (recommended, not observed)</td><td>Chat, Feed, Goals, Library. Side chats live in Chat; Ideas and Media in Library; Settings from the profile button</td></tr>
+<tr><td>Dark mode</td><td>Near-black <code>#0B0B0F</code></td><td>Warm dark <code>#171715</code>, lifted accent</td><td>Web system's warm dark; contrast checked in CI</td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Tokens:</strong> <code>packages/tokens</code> holds the web system's <code>:root</code> values (plus the chosen accent) in JSON, light and dark, and builds CSS variables for web and a typed theme for React Native.</li>
+<li><strong>Component contracts:</strong> <code>packages/ui-contracts</code> defines props, states and accessible names once; <code>ui-web</code> and later <code>ui-native</code> render them natively.</li>
+<li><strong>Components for Q&amp;A (phase 1):</strong> Chat turn (user and assistant distinct by surface, not colour alone), Composer, Sources block (numbered citations beside each claim, Sources list at the end, links copied verbatim, no citation styling without a source), Progress state ("Searching", "Reading 3 pages", "Failed, here's why"; never "done" before a result), Collapsed reasoning section, Option widget (one short choice at the end of a reply, never stacked), Browser take-over banner (one sentence, one action), Library preview card.</li>
+<li><strong>Components for later phases:</strong> Approval card (payload frozen as shown; Edit opens the draft; no standing always-allow for browser actions, per-recipient always-allow possible for messaging), Verification-code card, Sheet/Modal, Grouped list (Settings), Connector row, Product card, Goal tracker, Idea card, Feed post, Media grid, Plan and usage card, Toast.</li>
+<li><strong>Navigation:</strong> the full IA (Chat, Side chats, Feed, Goals, Ideas, Media, Settings) is built into the shell from the start; destinations appear in the nav as their phase ships. Every push, email link and shared file deep-links to the exact message or file.</li>
+<li><strong>Mobile (later, Expo):</strong> thumb-first layout, bottom sheets for choices, approvals as a bottom sheet with full-width stacked buttons and Face ID / PIN for payments, drafts and in-flight tasks survive app switches, offline sends queue. Push only for results, consequential changes and approvals, never with sensitive content on the lock screen; permission asked after the first result, not at launch.</li>
+<li><strong>Working state without live text:</strong> both design docs expect live "Thinking…" text and a Stop button. Travila has no live text yet, so we show status lines from polling ("Searching", "Reading 3 pages") plus Stop, and the reasoning arrives with the finished reply.</li>
+<li><strong>Client-tool approvals:</strong> Muse warns that Travila client tools skip Travila's approval queue. In our design every action tool is a client tool that passes through our own policy gate and approval card (section 7), so this is covered; a test checks that no action tool runs without it.</li>
+<li><strong>Voice:</strong> the web system's do / don't table and the specs' section 10 become lint rules for UI copy (no filler, concrete results, honest unknowns).</li>
+<li><strong>Acceptance:</strong> zero axe violations per Storybook story, AA contrast for every token pair in light and dark, 200% zoom passes, visible focus on every control, reduced motion honoured.</li>
+</ul>
+
+<h2 id="repo">10. Repository, stack, environment</h2>
+<pre>AI-assistant/
+  apps/
+    web/            Next.js: UI only, calls apps/api
+    api/            Fastify: session gate, orchestrator, tool runner, policy gate, dispatcher
+    worker/         background jobs: Browser Use runs, scheduler callbacks, ideas, Feed, briefings
+    vault/          vault service with its own database role and key
+    mobile/         Expo, after phase 2
+  packages/
+    tokens/  ui-contracts/  ui-web/  api-client/  db/ (schema + migrations)  agent/ (profiles, tool schemas)
+  evals/            Q&amp;A datasets, fixture pages
+  docs/             HTML specs (this file moves here)</pre>
+<div class="tbl"><table>
+<thead><tr><th>Variable</th><th>Used by</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>TRAVILA_API_KEY</code></td><td>api, worker</td><td>Secret key with <code>users:impersonate</code> and <code>conversations:read</code></td></tr>
+<tr><td><code>TRAVILA_API_BASE</code></td><td>api, worker</td><td><code>https://api.travila.ai</code></td></tr>
+<tr><td><code>BROWSER_USE_API_KEY</code></td><td>worker</td><td>Header <code>X-Browser-Use-API-Key</code></td></tr>
+<tr><td><code>DEEPSEEK_API_KEY</code></td><td>api</td><td>DeepSeek Search and Fetch. Stored as a network secret for <code>api.deepseek.com</code> (header <code>Authorization</code>, prefix <code>Bearer</code>)</td></tr>
+<tr><td><code>BRAVE_SEARCH_API_KEY</code></td><td>api</td><td>Only if we switch the search backend to Brave</td></tr>
+<tr><td><code>DATABASE_URL</code>, <code>VAULT_DATABASE_URL</code></td><td>api and worker; vault</td><td>Separate roles</td></tr>
+<tr><td><code>VAULT_KMS_KEY_ID</code></td><td>vault</td><td>Envelope encryption key</td></tr>
+<tr><td>Auth provider keys</td><td>web, api</td><td>Default Clerk</td></tr>
+</tbody></table></div>
+<p>Keys are never written to the repository, these documents or project memory. The Travila and Browser Use keys posted in chat should be rotated before they go into the server environment.</p>
+
+<h2 id="roadmap">11. Roadmap and acceptance checks</h2>
+<p>Each step is a pull request (or a short series) that is done only when its checks pass in CI or in a demo Andrew runs.</p>
+<div class="tbl"><table>
+<thead><tr><th>Step</th><th>Ships</th><th>Done when</th></tr></thead>
+<tbody>
+<tr><td>0 Clean slate</td><td>Inventory of what Codex left in Travila, Browser Use and Vercel; deletion of the approved items</td><td>Andrew has approved a written list; each deletion is confirmed by a follow-up list call</td></tr>
+<tr><td>1a Foundations</td><td>Monorepo, CI, full schema in <code>packages/db</code>, tokens, secret scanner</td><td>CI green on a fresh clone; migrations run up and down; Storybook shows tokens in light and dark</td></tr>
+<tr><td>1b Chat</td><td>Sign-in, Main and side chats through Travila, status lines, Markdown replies</td><td>Two-user isolation test returns 403; refresh mid-reply recovers without resending; clean-room side chat gets no Main context</td></tr>
+<tr><td>1c Research</td><td><code>web_search</code> (DeepSeek Search), <code>fetch_page</code>, <code>memory_search</code>, policy gate, Sources pane</td><td>Injection fixture skipped and flagged; SSRF tests fail closed; every cited URL is in the run's sources</td></tr>
+<tr><td>1d Browser</td><td><code>browse</code> via Browser Use, live view, take-over, upload in and file out</td><td>JavaScript-only fixture answered; uploaded PDF processed and original downloadable; live view owner-only</td></tr>
+<tr><td>1e Evals and polish</td><td>Travila eval set for Q&amp;A, model comparison (DeepSeek, Sonnet 5, Qwen) and search comparison (DeepSeek Search vs Brave), breakpoints, dark mode, Settings shell</td><td>Citation accuracy and injection-skip rate reported on every PR; a table of quality and cost per answer for each model; axe zero violations</td></tr>
+<tr><td>2 to 7</td><td>Features by phase in section 4</td><td>Each phase gets its own acceptance list from PRD section 15 and specs section 18 before work starts</td></tr>
+</tbody></table></div>
+
+<h2 id="open">12. Open questions</h2>
+<h3>For Andrew</h3>
+<ul>
+<li>Rotate the two posted keys.</li>
+</ul>
+<h3>For Travila</h3>
+<ul>
+<li>Which Qwen versions can be added when we start model testing?</li>
+<li>During a run, does <code>conversation-state</code> return partial assistant text, or only finished messages? If partial, polling can show text as it is written.</li>
+<li>Which exact DeepSeek model IDs are available to us (for example V4.1 Flash and V4 Pro)?</li>
+<li><s>Can Travila give us DeepSeek's Search and Fetch APIs?</s> Not today; Travila will discuss it. We call DeepSeek directly meanwhile.</li>
+</ul>
+<h3>For Muse (details the PRD and specs leave open)</h3>
+<ol>
+<li><s>How are sources shown in a Q&amp;A answer?</s> Answered by the web design system: numbered citations beside the claim and a Sources list at the end.</li>
+<li>Partly answered (states "Building…", "Sent", "Failed, here's why"; lead with the result). Still open: the exact status lines during research.</li>
+<li>How does a side chat differ from Main in memory: does a clean room read memory, write memory, both or neither?</li>
+<li>Password vault: what fields does the capture page ask for, how is a saved credential shown in Settings, and how long does a <code>[credential:&lt;uuid&gt;]</code> reference stay valid?</li>
+<li>Approval cards: partly answered (no always-allow for browser actions; per-recipient always-allow for messaging). Still open: the other grant scopes and how grants are listed and revoked in Settings › Permissions.</li>
+<li>The web design system calls itself a companion to a "Travila blending recommendation". Can you share that document?</li>
+<li>Goals: the GOAL.md template, the briefing format, and how often briefings are written.</li>
+<li>Ideas and Feed: how often each is generated, the card fields, and the default Feed prompt text.</li>
+<li>Media: what "snapshot lineage" and "resume / refine" look like in the viewer.</li>
+<li>Settings inner screens: the rows under Permissions, Notifications, Appearance and Data controls.</li>
+<li>Onboarding: what the first-run flow asks and in what order.</li>
+<li>Any screenshots of the Muse web client, and of Goals, Ideas, Feed and Media on iOS.</li>
+</ol>
+
+<h2 id="sources">13. Sources</h2>
+<ul>
+<li><a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">Meta: Security and safety for AI agents, our approach with Muse</a></li>
+<li>Project files: Reverse-Engineering Muse PRD; Muse UI/UX Design Specs; <a href="../design/muse-web-design-system.html">Muse Web &amp; Mobile Design System</a></li>
+<li>Travila: <a href="https://docs.travila.ai/">docs home</a>, <a href="https://docs.travila.ai/managed-agents/conversations/quickstart">quickstart</a>, <a href="https://docs.travila.ai/core-platform/identity-access/authentication">authentication</a>, <a href="https://docs.travila.ai/managed-agents/conversations/generation">generation</a>, <a href="https://docs.travila.ai/managed-agents/conversations/configuration/#reasoning">reasoning</a>, <a href="https://docs.travila.ai/managed-agents/conversations/streaming/subscribing">streaming</a>, <a href="https://docs.travila.ai/managed-agents/delegation-approvals/using-tools">tools and approvals</a>, <a href="https://docs.travila.ai/api/models/tool-execution-policy">tool execution policy</a>, <a href="https://docs.travila.ai/managed-agents/memory-knowledge">memory</a>, <a href="https://docs.travila.ai/api/model-controls/routing">model routing</a>, <a href="https://docs.travila.ai/integrations/tools-connections/connected-apps">connected apps</a>, <a href="https://docs.travila.ai/integrations/tools-connections/custom-mcp-servers">custom MCP servers</a>, <a href="https://docs.travila.ai/glossary">glossary</a></li>
+<li>DeepSeek: <a href="https://api-docs.deepseek.com/news/news261017/">V4.1 Flash and Search/Fetch API release</a>, <a href="https://api-docs.deepseek.com/guides/search">Search and Fetch API guide</a>, <a href="https://api-docs.deepseek.com/guides/responses_api/">Responses API web_search</a>, <a href="https://www.kucoin.com/news/flash/deepseek-launches-web-search-and-fetch-apis-temporarily-lists-v4-1-flash-1017-snapshot">Search/Fetch API details (news report)</a></li>
+<li>Browser Use: <a href="https://browser-use.com/developers">developers</a>, <a href="https://docs.browser-use.com/cloud/llms-full.txt">cloud docs</a></li>
+</ul>
+
+</main>
+</body>
+</html>

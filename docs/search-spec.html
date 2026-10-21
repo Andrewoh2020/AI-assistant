@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chat Search Spec</title>
+    <style>
+      :root {
+        --bg: #fcfcfc;
+        --surface: #ffffff;
+        --fill: #f3f4f5;
+        --ink: #111112;
+        --ink-2: #686a6d;
+        --line: #e2e2e2;
+        --accent: #2962cd;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          16px/1.55 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1 {
+        font-size: 28px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 20px;
+        margin: 36px 0 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+      }
+      .lead,
+      .muted {
+        color: var(--ink-2);
+      }
+      .tag {
+        display: inline-block;
+        font-size: 13px;
+        padding: 2px 10px;
+        border-radius: 999px;
+        background: var(--fill);
+        color: var(--ink-2);
+      }
+      img {
+        max-width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+      code {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 14px;
+        background: var(--fill);
+        padding: 1px 5px;
+        border-radius: 6px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 15px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      .swatch {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border-radius: 4px;
+        border: 1px solid var(--line);
+        vertical-align: -2px;
+        margin-right: 6px;
+      }
+      li {
+        margin: 6px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Chat search</h1>
+      <p class="lead">
+        How searching your chats should look and work, copied from Muse's desktop app.
+        <span class="tag">Not built yet</span>
+      </p>
+      <p>
+        Today the Search box in the sidebar only filters side chats by name, and the Search icon
+        in the left bar is greyed out. When we build search, both open the window described here.
+      </p>
+
+      <h2>Reference</h2>
+      <img src="muse-search-reference.png" alt="Muse desktop app with the search window open" />
+      <p class="muted">Muse desktop, light mode, 20 October 2026.</p>
+
+      <h2>What it looks like</h2>
+      <table>
+        <tr>
+          <th>Part</th>
+          <th>Design (measured from the screenshot)</th>
+        </tr>
+        <tr>
+          <td>Backdrop</td>
+          <td>The whole app dims: black at 10% over everything (page turns #E2E2E2).</td>
+        </tr>
+        <tr>
+          <td>Window</td>
+          <td>
+            Centred horizontally, about 213px from the top, 513px wide, height fits its content.
+            Background <span class="swatch" style="background: #fcfcfc"></span>#FCFCFC, corners
+            about 24px, large soft shadow.
+          </td>
+        </tr>
+        <tr>
+          <td>Search field</td>
+          <td>
+            Magnifier icon then "Search" placeholder, 18px text, no box of its own. A 1px line
+            (#E2E2E2) under it, inset from the window edges.
+          </td>
+        </tr>
+        <tr>
+          <td>Section label</td>
+          <td>"Recents", 14px, grey (#686A6D), above the list.</td>
+        </tr>
+        <tr>
+          <td>Each row</td>
+          <td>
+            A 36px round grey circle (#F3F4F5) with a chat-bubble icon; then the chat's name
+            (15px, near-black); under it, a preview of the latest message, one line, cut off with
+            "…", then " · " and when it was last active, in grey 13px. The hovered or selected row
+            gets a #F3F4F5 rounded background.
+          </td>
+        </tr>
+        <tr>
+          <td>Times</td>
+          <td>
+            Relative when recent: "46m ago", "9h ago", "5d ago". After about a week, a short
+            date: "11 Oct".
+          </td>
+        </tr>
+        <tr>
+          <td>List</td>
+          <td>Recents shows the 6 most recently active chats, Main chat included.</td>
+        </tr>
+      </table>
+
+      <h2>How it behaves</h2>
+      <ul>
+        <li>
+          Opens from the Search icon in the left bar, the sidebar's Search box, or ⌘K (Ctrl K on
+          Windows). The search field is focused straight away.
+        </li>
+        <li>With an empty field it shows Recents. Typing replaces Recents with results.</li>
+        <li>
+          Results match chat names and the text of messages, yours and the assistant's, in any
+          language (Korean included). Each result shows the chat, the matching snippet with the
+          match in bold, and its time. Archived chats are included and marked "Archived".
+        </li>
+        <li>
+          Up and Down arrows move the highlight, Enter opens the chat (and scrolls to the
+          matching message once we can link to messages). Clicking a row does the same.
+        </li>
+        <li>Escape, clicking the backdrop, or opening a chat closes the window.</li>
+        <li>No results: "No chats match “…”".</li>
+        <li>On phones it fills the screen, with a Cancel button beside the field.</li>
+      </ul>
+
+      <h2>How we'll build it</h2>
+      <ul>
+        <li>
+          <strong>Backend:</strong> <code>GET /search?q=</code> returns matching chats and
+          messages for the signed-in user only (the database's row-level security already
+          enforces this). <code>GET /chats</code> gains each chat's latest message preview for
+          Recents.
+        </li>
+        <li>
+          <strong>Database:</strong> a trigram index (Postgres <code>pg_trgm</code>) on chat
+          names and message text, so partial words and Korean match without language rules. If
+          that gets slow at scale, add full-text search alongside it.
+        </li>
+        <li>
+          <strong>Website:</strong> one shared search window component, opened from the three
+          places above, using the same Menu "click away to close" behaviour.
+        </li>
+        <li>
+          <strong>Tests:</strong> user B never sees user A's matches; Korean and English matches;
+          archived chats appear marked.
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>

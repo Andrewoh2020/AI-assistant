@@ -1,0 +1,8 @@
+# Files the Vercel CLI never uploads (it builds from source).
+.env
+.env.*
+!.env.example
+**/.next
+**/dist
+**/node_modules
+**/*.tsbuildinfo
