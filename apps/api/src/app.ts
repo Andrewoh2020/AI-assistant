@@ -14,6 +14,18 @@ import type { Config } from "./config.js";
 import { BadRequest } from "./errors.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
 import { extractText } from "./extract.js";
+import { DeepSeekBookingReader, type BookingReader } from "./bookings.js";
+import {
+  checkState,
+  connectGmail,
+  disconnectGmail,
+  gmailStatus,
+  signState,
+  syncGmail,
+  syncIfDue,
+  type GmailDeps,
+} from "./gmail.js";
+import { GoogleAuthError, GoogleHttp, type Google } from "./google.js";
 import {
   advanceRun,
   Conflict,
@@ -59,6 +71,10 @@ export interface AppDeps {
   defer?: (work: Promise<unknown>) => void;
   resolve?: Resolver;
   browserCheckGapMs?: number;
+  /** Google sign-in and Gmail; built from the config when left out. */
+  google?: Google;
+  /** Reads bookings out of emails; DeepSeek when left out. */
+  bookingReader?: BookingReader;
 }
 
 declare module "fastify" {
@@ -95,6 +111,19 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     defer: deps.defer,
     resolve: deps.resolve,
     browserCheckGapMs: deps.browserCheckGapMs,
+  };
+  const gmailDeps: GmailDeps = {
+    sql,
+    google: deps.google ?? new GoogleHttp(config.googleClientId, config.googleClientSecret),
+    reader:
+      deps.bookingReader ?? new DeepSeekBookingReader(config.deepseekBase, config.deepseekKey),
+    vaultKey,
+    secret: config.sessionSecret,
+  };
+  // Work that carries on after the response (on Vercel, waitUntil keeps the function alive).
+  const later = (work: Promise<unknown>) => {
+    const safe = work.catch((err) => app.log.error(err));
+    if (deps.defer) deps.defer(safe);
   };
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", bodyLimit: 64 * 1024 });
 
@@ -239,6 +268,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.get("/chats", async (req, reply) => {
     const s = requireSession(req, reply);
     if (!s) return;
+    // Opening the app is when new booking emails are looked for (at most every 15 minutes).
+    later(syncIfDue(gmailDeps, s.userId));
     return { chats: (await listChats(sql, s)).map(chatSummary) };
   });
 
@@ -690,6 +721,69 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       return result;
     },
   );
+
+  // Gmail ---------------------------------------------------------------------------------------
+  // Connect with Google's sign-in, then the app reads booking emails (read-only) to find trips.
+
+  const gmailCallback = (req: FastifyRequest) => {
+    const base =
+      config.publicUrl ||
+      `${config.secureCookies ? "https" : String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers["x-forwarded-host"] ?? req.headers.host}`;
+    return `${base}/api/connectors/gmail/callback`;
+  };
+
+  /** Back to the Main chat with Settings open on Connected accounts. */
+  const backToSettings = async (s: Session, reply: FastifyReply, result: string) => {
+    const [main] = (await listChats(sql, s)).filter((c) => c.kind === "main");
+    const q = `settings=connections&gmail=${result}`;
+    return reply.redirect(main ? `/chat/${main.id}?${q}` : `/?${q}`);
+  };
+
+  app.get("/connectors/gmail", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    reply.header("Cache-Control", "no-store");
+    return gmailStatus(gmailDeps, s.userId);
+  });
+
+  app.get("/connectors/gmail/start", async (req, reply) => {
+    if (!req.session) return reply.redirect("/sign-in");
+    if (!gmailDeps.google.available) return backToSettings(req.session, reply, "unavailable");
+    return reply.redirect(
+      gmailDeps.google.authUrl(
+        gmailCallback(req),
+        signState(req.session.userId, config.sessionSecret),
+      ),
+    );
+  });
+
+  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+    "/connectors/gmail/callback",
+    async (req, reply) => {
+      const s = req.session;
+      if (!s) return reply.redirect("/sign-in");
+      const { code, state, error } = req.query;
+      if (error || !code) return backToSettings(s, reply, "cancelled");
+      if (!state || !checkState(state, s.userId, config.sessionSecret)) {
+        return backToSettings(s, reply, "failed");
+      }
+      try {
+        await connectGmail(gmailDeps, s.userId, code, gmailCallback(req));
+      } catch (err) {
+        if (!(err instanceof GoogleAuthError)) app.log.error(err);
+        return backToSettings(s, reply, err instanceof GoogleAuthError ? "denied" : "failed");
+      }
+      later(syncGmail(gmailDeps, s.userId));
+      return backToSettings(s, reply, "connected");
+    },
+  );
+
+  app.delete("/connectors/gmail", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    await disconnectGmail(gmailDeps, s.userId);
+    return { ok: true };
+  });
 
   return app;
 }

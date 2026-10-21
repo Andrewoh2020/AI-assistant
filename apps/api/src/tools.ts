@@ -3,6 +3,7 @@ import { withUser, type Sql } from "@ai-assistant/db";
 import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
+import { tripsText, upcomingTrips } from "./gmail.js";
 import { decide, type Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
@@ -246,6 +247,12 @@ export async function runTool(
       };
     }
 
+    if (call.name === "list_trips") {
+      const trips = await upcomingTrips(ctx.sql, ctx.userId);
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      return { trips: tripsText(trips) };
+    }
+
     // memory_search
     const memories = await deps.travila.searchMemories(ctx.travilaUserId, String(args.query), 5);
     await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
@@ -275,6 +282,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (searches.length > 1) return `Running ${searches.length} searches`;
   if (calls.some((c) => c.name === "read_file")) return "Reading your file";
   if (calls.some((c) => c.name === "memory_search")) return "Checking what I remember";
+  if (calls.some((c) => c.name === "list_trips")) return "Checking your trips";
   return "Working";
 }
 

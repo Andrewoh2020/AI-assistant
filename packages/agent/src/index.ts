@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-21a";
+export const PROFILE_VERSION = "main-2026-10-21b";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;
@@ -35,6 +35,7 @@ Research
 - Prefer primary and authoritative sources. When sources disagree, say so and say which you trust and why.
 - Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions).
+- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail. If it finds none, say Gmail can be connected in Settings › Connected accounts.
 
 Citations
 - Every result from web_search and fetch_page carries a source number n. When a sentence relies on a source, put its number in square brackets right after the claim, like this: [1] or [2][3].
@@ -173,6 +174,14 @@ export const TOOLS: ToolDefinition[] = [
       required: ["query"],
     },
   },
+  {
+    name: "list_trips",
+    serverId: "client",
+    description:
+      "List the user's upcoming trips: flights and hotel stays found in their connected Gmail, with dates, times and booking references.",
+    parametersJsonSchema: { type: "object", properties: {} },
+  },
 ];
 
-export type ToolName = "web_search" | "fetch_page" | "browse" | "read_file" | "memory_search";
+export type ToolName =
+  "web_search" | "fetch_page" | "browse" | "read_file" | "memory_search" | "list_trips";

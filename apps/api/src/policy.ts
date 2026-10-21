@@ -12,7 +12,14 @@ export type Resolver = (host: string) => Promise<string[]>;
 const defaultResolver: Resolver = async (host) =>
   (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
-const ALLOWED_TOOLS = new Set(["web_search", "fetch_page", "browse", "read_file", "memory_search"]);
+const ALLOWED_TOOLS = new Set([
+  "web_search",
+  "fetch_page",
+  "browse",
+  "read_file",
+  "memory_search",
+  "list_trips",
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function decide(
@@ -33,6 +40,8 @@ export async function decide(
     }
     return { decision: "allow" };
   }
+  // Reads only the person's own trips (row-level security); it takes nothing in.
+  if (tool === "list_trips") return { decision: "allow" };
   if (tool === "read_file") {
     // Row-level security keeps it to the user's own files; this only checks the shape.
     if (typeof args.file_id !== "string" || !UUID.test(args.file_id))

@@ -575,3 +575,87 @@ export async function codeForRun(
     return code;
   });
 }
+
+// Connected accounts ----------------------------------------------------------------------------
+// Sign-in tokens for accounts the person connected (Gmail today). Sealed the same way as saved
+// logins. Only the connector code that reads the account (gmail.ts) asks for the token, and it
+// never reaches the assistant.
+
+interface ConnectedRow {
+  id: string;
+  sealed: Buffer;
+  wrapped_key: Buffer;
+  key_id: string;
+}
+
+const accountContext = (userId: string, id: string, provider: string) =>
+  `vault:v1:connected:${userId}:${id}:${provider}`;
+
+/** Saves (or replaces) the refresh token for a connected account. */
+export async function saveAccountToken(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  provider: "gmail",
+  token: string,
+): Promise<void> {
+  await withVault(sql, userId, async (tx) => {
+    const [existing] = await tx<{ id: string }[]>`
+      SELECT id FROM vault.connected_accounts WHERE provider = ${provider}`;
+    const id = existing?.id ?? randomUUID();
+    const dataKey = randomBytes(32);
+    const aad = accountContext(userId, id, provider);
+    try {
+      const sealed = encrypt(dataKey, aad, Buffer.from(token, "utf8"));
+      const wrapped = encrypt(vk.key, `wrap:${aad}`, dataKey);
+      await tx`
+        INSERT INTO vault.connected_accounts (id, user_id, provider, sealed, wrapped_key, key_id)
+        VALUES (${id}, ${userId}, ${provider}, ${sealed}, ${wrapped}, ${vk.id})
+        ON CONFLICT (user_id, provider) DO UPDATE
+          SET sealed = EXCLUDED.sealed, wrapped_key = EXCLUDED.wrapped_key,
+              key_id = EXCLUDED.key_id, updated_at = now()`;
+    } finally {
+      dataKey.fill(0);
+    }
+  });
+}
+
+/** The refresh token for a connected account, or null when there is none or it can't be opened. */
+export async function accountToken(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  provider: "gmail",
+): Promise<string | null> {
+  const [row] = await withVault(
+    sql,
+    userId,
+    (tx) => tx<ConnectedRow[]>`
+      SELECT id, sealed, wrapped_key, key_id FROM vault.connected_accounts
+      WHERE provider = ${provider}`,
+  );
+  if (!row || row.key_id !== vk.id) return null;
+  const aad = accountContext(userId, row.id, provider);
+  try {
+    const dataKey = decrypt(vk.key, `wrap:${aad}`, row.wrapped_key);
+    try {
+      return decrypt(dataKey, aad, row.sealed).toString("utf8");
+    } finally {
+      dataKey.fill(0);
+    }
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteAccountToken(
+  sql: Sql,
+  userId: string,
+  provider: "gmail",
+): Promise<void> {
+  await withVault(
+    sql,
+    userId,
+    (tx) => tx`DELETE FROM vault.connected_accounts WHERE provider = ${provider}`,
+  );
+}
