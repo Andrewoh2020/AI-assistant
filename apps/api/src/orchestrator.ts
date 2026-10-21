@@ -22,6 +22,7 @@ import {
   browserViewsFor,
   findBrowserSession,
   stopBrowsing,
+  vaultKey,
   type BrowserDeps,
 } from "./browser.js";
 import { groundAnswer } from "./citations.js";
@@ -63,7 +64,7 @@ export interface Deps extends ToolDeps {
   vaultKey?: VaultKey;
 }
 
-import type { VaultKey } from "./vault.js";
+import { redactSavedPasswords, type VaultKey } from "./vault.js";
 
 export type { MessageView, RunView, SourceView } from "@ai-assistant/api-client";
 
@@ -639,18 +640,18 @@ async function finalizeRun(
 ): Promise<RunView> {
   const { sql } = deps;
   const last = runMessages.at(-1)!;
-  const reasoning = runMessages
-    .map((m) => textOf(m, "CONTENT_PART_TYPE_REASONING"))
-    .filter(Boolean)
-    .join("\n\n");
+  const [answer, reasoning] = await redactSavedPasswords(sql, vaultKey(deps), s.userId, [
+    textOf(last, "CONTENT_PART_TYPE_TEXT"),
+    runMessages
+      .map((m) => textOf(m, "CONTENT_PART_TYPE_REASONING"))
+      .filter(Boolean)
+      .join("\n\n"),
+  ]);
 
   await withUser(sql, s.userId, async (tx) => {
     const sources = await tx<{ ref_number: number; url: string }[]>`
       SELECT ref_number, url FROM sources WHERE run_id = ${run.id}`;
-    const grounded = groundAnswer(
-      textOf(last, "CONTENT_PART_TYPE_TEXT"),
-      new Map(sources.map((r) => [r.ref_number, r.url])),
-    );
+    const grounded = groundAnswer(answer!, new Map(sources.map((r) => [r.ref_number, r.url])));
     const usage = runMessages.reduce<Record<string, number>>((acc, m) => {
       for (const [k, v] of Object.entries(m.usage ?? {}))
         if (typeof v === "number") acc[k] = (acc[k] ?? 0) + v;

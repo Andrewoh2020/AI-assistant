@@ -921,6 +921,31 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       expect(await withUser(sql!, other, (tx) => tx`SELECT * FROM audit_events`)).toHaveLength(0);
     });
 
+    it("blanks a saved password out of the answer, even one the model read off the page", async () => {
+      const cookie = await signUp();
+      const first = await browseTask(
+        cookie,
+        { result: "NEEDS_SIGN_IN: Please sign in." },
+        { result: "Signed in." },
+      );
+      const asking = await pollUntil(cookie, first, (r) => r.browsers[0]?.ask);
+      await send(cookie, asking.browsers[0].id, { username: "tomsmith", password: PASSWORD });
+      await pollUntilDone(cookie, first);
+
+      const chat = await mainChatId(cookie);
+      travila.scripts.push([
+        { answer: `The page lists the demo login tomsmith / ${PASSWORD} for you.` },
+      ]);
+      const run = await pollUntilDone(
+        cookie,
+        (await ask(cookie, chat, "What was it?")).json().run.id,
+      );
+      expect(run.message.text).toBe("The page lists the demo login tomsmith / •••••••• for you.");
+      const [hit] = await sql!<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM messages WHERE parts::text LIKE ${"%" + PASSWORD + "%"}`;
+      expect(hit!.n).toBe(0);
+    });
+
     it("says when the site rejects the saved login, and the new one replaces it", async () => {
       const cookie = await signUp();
       const userId = await userOf(cookie);

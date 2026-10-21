@@ -46,7 +46,8 @@ export interface BrowserDeps {
   vaultKey?: VaultKey;
 }
 
-const vaultKey = (deps: BrowserDeps) => deps.vaultKey ?? vaultKeyFrom("", deps.secret);
+export const vaultKey = (deps: Pick<BrowserDeps, "vaultKey" | "secret">) =>
+  deps.vaultKey ?? vaultKeyFrom("", deps.secret);
 
 export interface BrowseContext {
   userId: string;
