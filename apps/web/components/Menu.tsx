@@ -63,17 +63,19 @@ export function Menu({
 export function MenuItem({
   icon,
   checked,
+  danger,
   onSelect,
   children,
 }: {
   icon?: ReactNode;
   checked?: boolean;
+  danger?: boolean;
   onSelect: () => void;
   children: ReactNode;
 }) {
   return (
     <button
-      className="menu-item"
+      className={`menu-item ${danger ? "is-danger" : ""}`}
       type="button"
       role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
       aria-checked={checked}

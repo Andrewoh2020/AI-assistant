@@ -1,5 +1,5 @@
 import cookie from "@fastify/cookie";
-import { withUser, type Sql } from "@ai-assistant/db";
+import { withUser, type ChatRow, type Sql } from "@ai-assistant/db";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import {
   hashPassword,
@@ -18,12 +18,14 @@ import {
   advanceRun,
   Conflict,
   createSideChat,
+  deleteChat,
   getChat,
   listChats,
   NotFound,
   sendMessage,
   stopRun,
   updateChat,
+  type ChatListRow,
   type Deps,
   type Session,
 } from "./orchestrator.js";
@@ -223,14 +225,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   // Chats ----------------------------------------------------------------------
 
-  const chatSummary = (c: Awaited<ReturnType<typeof listChats>>[number]) => ({
+  const chatSummary = (c: ChatRow | ChatListRow) => ({
     id: c.id,
     kind: c.kind,
     title: c.title,
     cleanRoom: c.clean_room,
     pinned: c.pinned,
     archived: c.archived_at !== null,
-    updatedAt: new Date(c.updated_at).toISOString(),
+    updatedAt: new Date("last_active_at" in c ? c.last_active_at : c.updated_at).toISOString(),
+    activeRunId: "active_run_id" in c ? c.active_run_id : null,
   });
 
   app.get("/chats", async (req, reply) => {
@@ -253,12 +256,29 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.patch<{ Params: { id: string } }>("/chats/:id", async (req, reply) => {
     const s = requireSession(req, reply);
     if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("chat");
     const b = (req.body ?? {}) as Record<string, unknown>;
+    let title: string | undefined;
+    if (b.title !== undefined) {
+      title = typeof b.title === "string" ? b.title.replace(/\s+/g, " ").trim() : "";
+      if (!title) return reply.code(400).send({ error: "Give the chat a name." });
+      if (title.length > 120)
+        return reply.code(400).send({ error: "That name is too long (120 characters max)." });
+    }
     const chat = await updateChat(sql, s, req.params.id, {
       pinned: typeof b.pinned === "boolean" ? b.pinned : undefined,
       archived: typeof b.archived === "boolean" ? b.archived : undefined,
+      title,
     });
     return { chat: chatSummary(chat) };
+  });
+
+  app.delete<{ Params: { id: string } }>("/chats/:id", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("chat");
+    await deleteChat(sql, s, req.params.id);
+    return { ok: true };
   });
 
   app.get<{ Params: { id: string } }>("/chats/:id", async (req, reply) => {
