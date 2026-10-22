@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-22b";
+export const PROFILE_VERSION = "main-2026-10-22c";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;

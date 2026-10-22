@@ -45,9 +45,16 @@ export interface CreateThreadInput {
   clientToolTimeoutMs: number;
 }
 
+/**
+ * Providers tried first for the DeepSeek model (a preference: Travila still falls back to others).
+ * Unpinned, replies took 3-18 s; with these first, about 1-3 s (measured 2026-10-22).
+ */
+const PREFERRED_PROVIDERS = ["together", "baseten", "fireworks"];
+
 function generationConfig(input: CreateThreadInput) {
   return {
     models: input.models,
+    provider: { order: PREFERRED_PROVIDERS },
     systemPrompt: input.systemPrompt,
     reasoning: { effort: input.reasoningEffort, exclude: false },
     clientTools: input.clientTools,
