@@ -1028,9 +1028,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (ticking) return;
     ticking = true;
     try {
-      const users = gmailDeps.google.available
-        ? await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(() => [])
-        : [];
+      const users = await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(
+        () => [],
+      );
       for (const u of users) {
         await syncIfDue(gmailDeps, u.user_id);
         await planFlights(flightDeps, u.user_id).catch((err) => app.log.error(err));
