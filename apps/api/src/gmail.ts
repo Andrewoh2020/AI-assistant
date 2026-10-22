@@ -254,8 +254,11 @@ export async function fileBooking(
 ): Promise<boolean> {
   const key = dedupeKey(b);
   const { status, ...details } = b;
-  const [existing] = await tx<{ id: string; trip_id: string }[]>`
-    SELECT id, trip_id FROM trip_items WHERE dedupe_key = ${key}`;
+  // The same booking saved twice at once (parallel tool calls) would otherwise both insert.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${userId + ":" + key}))`;
+  const [existing] = await tx<
+    { id: string; trip_id: string; details: Record<string, unknown> | null }[]
+  >`SELECT id, trip_id, details FROM trip_items WHERE dedupe_key = ${key}`;
   if (status === "cancelled") {
     if (existing) {
       await tx`DELETE FROM trip_items WHERE id = ${existing.id}`;
@@ -266,8 +269,17 @@ export async function fileBooking(
   const start = startOf(b)!;
   const end = endOf(b) ?? start;
   if (existing) {
-    await tx`UPDATE trip_items SET details = ${tx.json(details as never)}, item_date = ${start},
-               confirmation_ref = ${b.confirmation}, source_message_id = ${messageId},
+    // Saved again from chat (the model sometimes saves a flight twice, once with fewer details):
+    // keep what was already known, like the booking reference, instead of blanking it.
+    const merged = messageId
+      ? details
+      : {
+          ...existing.details,
+          ...Object.fromEntries(Object.entries(details).filter(([, v]) => v != null)),
+        };
+    await tx`UPDATE trip_items SET details = ${tx.json(merged as never)}, item_date = ${start},
+               confirmation_ref = ${(merged as { confirmation?: string | null }).confirmation ?? null},
+               source_message_id = ${messageId},
                updated_at = now()
              WHERE id = ${existing.id}`;
     await refreshTrip(tx, existing.trip_id);

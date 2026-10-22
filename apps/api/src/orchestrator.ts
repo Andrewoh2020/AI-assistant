@@ -27,7 +27,7 @@ import {
 } from "./browser.js";
 import { groundAnswer } from "./citations.js";
 import { Conflict, NotFound } from "./errors.js";
-import { attachmentNote, fileTexts, fileView } from "./files.js";
+import { attachmentNote, fileTexts, fileView, viewableImages } from "./files.js";
 import { flightViews } from "./flights.js";
 import { HttpError } from "./http.js";
 import {
@@ -468,6 +468,7 @@ export async function sendMessage(
           tx`UPDATE chats SET travila_profile_version = ${PROFILE_VERSION} WHERE id = ${chatId}`,
       );
     }
+    const images = await viewableImages(sql, s.userId, files);
     const travilaRunId = await travila.sendMessage(
       s.travilaUserId,
       threadId,
@@ -479,7 +480,9 @@ export async function sendMessage(
             s.userId,
             files.map((f) => f.id),
           ),
+          new Set(images.map((i) => i.id)),
         ),
+      images.map(({ mime, base64 }) => ({ mime, base64 })),
     );
     await withUser(
       sql,

@@ -6,7 +6,12 @@ export interface Travila {
   createThread(userId: string, input: CreateThreadInput): Promise<string>;
   /** Replaces a thread's model, instructions and tools (used when they change after it was made). */
   updateThreadConfig(userId: string, threadId: string, input: CreateThreadInput): Promise<void>;
-  sendMessage(userId: string, threadId: string, text: string): Promise<string>;
+  sendMessage(
+    userId: string,
+    threadId: string,
+    text: string,
+    images?: InlineImage[],
+  ): Promise<string>;
   getState(userId: string, threadId: string): Promise<TravilaState>;
   listPendingClientTools(userId: string, threadId: string): Promise<TravilaToolCall[]>;
   submitClientToolResults(
@@ -20,6 +25,12 @@ export interface Travila {
     query: string,
     topK: number,
   ): Promise<{ id: string; memory: string }[]>;
+}
+
+/** A picture sent with the message for the model to look at (base64 bytes). */
+export interface InlineImage {
+  mime: string;
+  base64: string;
 }
 
 export interface CreateThreadInput {
@@ -116,7 +127,12 @@ export class TravilaHttp implements Travila {
     });
   }
 
-  async sendMessage(userId: string, threadId: string, text: string): Promise<string> {
+  async sendMessage(
+    userId: string,
+    threadId: string,
+    text: string,
+    images: InlineImage[] = [],
+  ): Promise<string> {
     // Never retried automatically: a lost response doesn't mean the message wasn't accepted.
     const res = await this.call<{ runId: string }>(
       userId,
@@ -125,7 +141,14 @@ export class TravilaHttp implements Travila {
         conversationKey: threadId,
         userMessage: {
           role: "ROLE_USER",
-          content: [{ type: "CONTENT_PART_TYPE_TEXT", content: text }],
+          content: [
+            { type: "CONTENT_PART_TYPE_TEXT", content: text },
+            ...images.map((img) => ({
+              type: "CONTENT_PART_TYPE_IMAGE_BASE64",
+              content: img.base64,
+              metadata: { mimeType: img.mime },
+            })),
+          ],
         },
       },
       0,
