@@ -92,6 +92,25 @@ export interface MessageView {
   clientMessageId: string | null;
 }
 
+/** A message as a share link shows it: ID-style numbers hidden, files and cards as one line. */
+export interface SharedMessage extends MessageView {
+  shared: {
+    /** Names of attached or downloaded files (the files themselves aren't shared). */
+    files: string[];
+    /** Browser jobs behind the answer: "title: status". */
+    browsers: string[];
+    /** The trip card's state in a sentence. */
+    flight: string | null;
+  };
+}
+
+export interface SharedChat {
+  title: string;
+  /** When the link stops working. */
+  expiresAt: string;
+  messages: SharedMessage[];
+}
+
 export interface RunView {
   id: string;
   chatId: string;
@@ -461,6 +480,11 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     updateChat: (id: string, input: { pinned?: boolean; archived?: boolean; title?: string }) =>
       call<{ chat: ChatSummary }>("PATCH", `/chats/${id}`, input),
     deleteChat: (id: string) => call<{ ok: true }>("DELETE", `/chats/${id}`),
+    /** A read-only link to the chat that anyone can open until it expires. */
+    shareChat: (id: string) =>
+      call<{ path: string; expiresAt: string }>("POST", `/chats/${id}/share`, {}),
+    sharedChat: (token: string) =>
+      call<{ chat: SharedChat }>("GET", `/share/${encodeURIComponent(token)}`),
     getChat: (id: string) =>
       call<{
         chat: ChatSummary;

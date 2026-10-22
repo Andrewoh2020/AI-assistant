@@ -467,10 +467,24 @@ code {
   right: 4px;
   opacity: 0;
 }
+/* The open chat's ⋯ always shows, so Share is easy to find; phones and tablets can't hover, so
+   there every row shows it. */
 .chat-row:hover .row-menu,
+.chat-row.is-current .row-menu,
 .chat-row:focus-within .row-menu,
 .row-menu:has([aria-expanded="true"]) {
   opacity: 1;
+}
+@media (hover: none) {
+  .chat-row .row-menu {
+    opacity: 1;
+  }
+  .chat-list .chat-row a {
+    padding-right: 36px;
+  }
+}
+.chat-list .chat-row.is-current a {
+  padding-right: 36px;
 }
 .pin {
   display: inline-grid;
@@ -1994,4 +2008,45 @@ dialog.confirm p {
   .trip-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* A chat someone shared with a read-only link (app/share/[token]). */
+.shared-chat {
+  max-width: var(--chat-column);
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.shared-head {
+  margin-bottom: 24px;
+}
+.shared-head h1 {
+  font-size: var(--type-h1-size);
+  margin: 0 0 4px;
+}
+.shared-note {
+  margin: -12px 0 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.shared-time {
+  margin: -16px 0 20px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.turn-user + .shared-time {
+  text-align: right;
+}
+.share-link {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  font: inherit;
+  font-size: 13px;
+}
+.share-error {
+  display: block;
+  margin-top: 8px;
 }

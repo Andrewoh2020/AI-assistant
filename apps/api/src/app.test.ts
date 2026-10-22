@@ -735,6 +735,46 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(denied.error).toBe("No file with that file_id.");
   });
 
+  it("shares a chat read-only, with ID-style numbers hidden", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    travila.scripts.push([{ answer: "Please use the trip card, not the chat." }]);
+    const sent = await ask(a, chat, "Ann Lee, passport 549957786, flight QR 4791 on 23 Oct");
+    await pollUntilDone(a, sent.json().run.id);
+
+    // Only the owner can make a link.
+    const b = await signUp();
+    const theirs = await app.inject({
+      method: "POST",
+      url: `/chats/${chat}/share`,
+      headers: { cookie: b },
+    });
+    expect(theirs.statusCode).toBe(403);
+    const made = await app.inject({
+      method: "POST",
+      url: `/chats/${chat}/share`,
+      headers: { cookie: a },
+    });
+    expect(made.statusCode).toBe(200);
+    const path = made.json().path as string;
+    expect(path).toMatch(/^\/share\/[\w-]+\.[\w-]+$/);
+
+    // Anyone with it can read, signed in or not; the passport number isn't in it.
+    const res = await app.inject({ method: "GET", url: path });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain("549957786");
+    const shared = res.json().chat;
+    expect(shared.title).toBe("Main chat");
+    expect(shared.messages.map((m: { text: string }) => m.text)).toEqual([
+      "Ann Lee, passport •••, flight QR 4791 on 23 Oct",
+      "Please use the trip card, not the chat.",
+    ]);
+
+    // A changed link doesn't open anything.
+    const forged = path.slice(0, -2) + (path.endsWith("A") ? "B" : "A") + path.slice(-1);
+    expect((await app.inject({ method: "GET", url: forged })).statusCode).toBe(404);
+  });
+
   it("saves a flight given in chat, keeping details when it's saved twice", async () => {
     const a = await signUp();
     const chat = await mainChatId(a);

@@ -5,7 +5,15 @@ import { airport, instantToLocal, localToInstant } from "./airports.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { FlightStatusSource, LiveFlight, RouteSource } from "./flightdata.js";
-import { factsFor, nextStatusAt, pickMode, planFlights, readMarker, tickAll } from "./flights.js";
+import {
+  airportReason,
+  factsFor,
+  nextStatusAt,
+  pickMode,
+  planFlights,
+  readMarker,
+  tickAll,
+} from "./flights.js";
 import { fileBooking } from "./gmail.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 import { bookingFrom } from "./tools.js";
@@ -129,6 +137,17 @@ describe("what a flight needs", () => {
     });
   });
 
+  it("quotes an airport-only reason only when the airline gave one", () => {
+    // What Qatar showed on 2026-10-22, with nothing to explain it.
+    expect(
+      airportReason("Please check in at the airport. https://cki.qatarairways.com/cki/dashboard"),
+    ).toBeNull();
+    expect(airportReason("no reason given")).toBeNull();
+    expect(airportReason("Travel documents must be verified at the airport for this route.")).toBe(
+      "Travel documents must be verified at the airport for this route.",
+    );
+  });
+
   it("reads the browser's answer only from the start of a line", () => {
     expect(readMarker('CHECKED_IN {"seat":"14A"}')).toEqual({
       marker: "CHECKED_IN",
@@ -221,8 +240,12 @@ afterAll(async () => {
   await sql?.end();
 });
 beforeEach(async () => {
-  // The scheduler looks at everyone's flights: start each test with none.
-  if (sql) await sql`DELETE FROM flight_plans`;
+  // The scheduler looks at everyone's flights (and everyone with Gmail connected, whose bookings
+  // it plans): start each test with none.
+  if (sql) {
+    await sql`DELETE FROM flight_plans`;
+    await sql`DELETE FROM connector_accounts WHERE provider = 'gmail'`;
+  }
   browser = new FakeBrowserUse();
   status = new FakeStatus();
   routes = new FakeRoutes();
@@ -351,6 +374,80 @@ const prep = {
   homeAddress: "1 Market St, San Francisco",
   noBannedItems: true,
 };
+
+describe.skipIf(!process.env.DATABASE_URL)(
+  "a trip with a connection, check-in already open",
+  () => {
+    it("shows the card with the reminder, and one save covers both legs", async () => {
+      const { cookie, userId } = await signUp();
+      // Mumbai to Doha to Philadelphia, leaving in 12 hours (seen 2026-10-22: the card got lost).
+      const leg1 = new Date(now.getTime() + 12 * H);
+      const leg2 = new Date(leg1.getTime() + 5 * H);
+      const legs = [
+        { flightNumber: "QR 4791", fromCode: "BOM", toCode: "DOH", at: leg1 },
+        { flightNumber: "QR 727", fromCode: "DOH", toCode: "PHL", at: leg2 },
+      ];
+      await withUser(sql!, userId, async (tx) => {
+        for (const l of legs) {
+          await fileBooking(
+            tx,
+            userId,
+            {
+              kind: "flight",
+              status: "confirmed",
+              airline: "Qatar Airways",
+              flightNumber: l.flightNumber,
+              fromCode: l.fromCode,
+              fromCity: null,
+              toCode: l.toCode,
+              toCity: null,
+              departAt: local(l.at, l.fromCode),
+              arriveAt: null,
+              confirmation: "9G39Y8",
+            },
+            null,
+          );
+        }
+      });
+      await planFlights({ sql: sql!, now: () => now }, userId);
+      await tick();
+
+      // The "check-in is open" message carries the card itself, so the form is right there.
+      const chats = (
+        await app.inject({ method: "GET", url: "/chats", headers: { cookie } })
+      ).json();
+      const main = chats.chats.find((c: { kind: string }) => c.kind === "main");
+      const messages = (
+        await app.inject({ method: "GET", url: `/chats/${main.id}`, headers: { cookie } })
+      ).json().messages as { text: string; flight: FlightView | null }[];
+      const nudges = messages.filter((m) => m.text.startsWith("Check-in for QR"));
+      expect(nudges).toHaveLength(2);
+      expect(nudges.every((m) => m.flight?.prep.required.includes("passportNumber"))).toBe(true);
+
+      // Filled in once, on one leg's card: both legs get the details and the tick, and both start.
+      const [first] = await flights(cookie);
+      const saved = await app.inject({
+        method: "POST",
+        url: `/flights/${first!.id}/prep`,
+        headers: { cookie },
+        payload: prep,
+      });
+      expect(saved.statusCode).toBe(200);
+      await settle();
+      const both = await flights(cookie);
+      expect(both.map((f) => [f.prep.required, f.prep.noBannedItems])).toEqual([
+        [[], true],
+        [[], true],
+      ]);
+      browser.scripts.push(
+        { polls: 5, result: "still going" },
+        { polls: 5, result: "still going" },
+      );
+      await tick();
+      expect(browser.runs.size).toBe(2);
+    });
+  },
+);
 
 describe.skipIf(!process.env.DATABASE_URL)("a flight from booking to landing", () => {
   it("asks once, checks in by itself, files the arrival card and says when to leave", async () => {
