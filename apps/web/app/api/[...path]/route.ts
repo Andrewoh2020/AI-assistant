@@ -11,6 +11,8 @@ async function handle(req: NextRequest, { params }: { params: Promise<{ path: st
   const app = await backend();
   const headers: Record<string, string> = {};
   req.headers.forEach((value, key) => {
+    // Only app/api/auth/clerk/route.ts may say who Clerk signed in.
+    if (key === "x-clerk-identity") return;
     headers[key] = value;
   });
   // Raw bytes, so file uploads arrive unchanged.

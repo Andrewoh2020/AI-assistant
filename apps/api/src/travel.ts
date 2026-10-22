@@ -67,11 +67,14 @@ export async function readProfile(sql: Sql, userId: string): Promise<TravelProfi
   return withUser(sql, userId, (tx) => profileOf(tx, userId));
 }
 
-// Postgres dates arrive as local-midnight Dates; read them back the same way.
-export const isoDate = (d: Date | null) =>
-  d
-    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-    : null;
+// Postgres dates arrive as local-midnight Dates; read them back the same way. A date just typed in
+// (editProfile) is still its "YYYY-MM-DD" text.
+export const isoDate = (d: Date | string | null) =>
+  typeof d === "string"
+    ? d
+    : d
+      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+      : null;
 
 /** What one flight needs, given what we already have. */
 export interface FlightNeeds {

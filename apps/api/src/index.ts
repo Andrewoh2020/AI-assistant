@@ -5,3 +5,4 @@ export { loadConfig, type Config } from "./config.js";
 export { DeepSeekSearch } from "./search.js";
 export { TravilaHttp } from "./travila.js";
 export { BrowserUseHttp } from "./browseruse.js";
+export { signIdentity, type ClerkIdentity } from "./auth.js";

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUser, type Sql } from "@ai-assistant/db";
 import { buildApp } from "./app.js";
+import { signIdentity } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { parseTotpKey, totp } from "./totp.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
@@ -172,6 +173,96 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       payload: { email, password: "long-enough-pw" },
     });
     expect(good.statusCode).toBe(200);
+  });
+
+  describe("Clerk sign-in", () => {
+    const clerk = (
+      clerkId: string,
+      email: string | null,
+      opts: { invite?: string; secret?: string; exp?: number } = {},
+    ) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/clerk",
+        headers: {
+          "x-clerk-identity": signIdentity(
+            { clerkId, email, name: "Ada Lovelace", exp: opts.exp ?? Date.now() / 1000 + 60 },
+            opts.secret ?? config.sessionSecret,
+          ),
+          ...(opts.invite ? { cookie: `aia_invite=${opts.invite}` } : {}),
+        },
+        payload: { timezone: "Asia/Singapore" },
+      });
+    const session = (res: Awaited<ReturnType<typeof clerk>>) =>
+      `aia_session=${res.cookies.find((c) => c.name === "aia_session")!.value}`;
+
+    it("lets a new person in only with the invite link's code", async () => {
+      const id = `user_${Date.now()}`;
+      const email = `${id}@example.com`;
+      const none = await clerk(id, email);
+      expect(none.statusCode).toBe(403);
+      expect(none.json().error).toMatch(/invite/);
+      expect((await clerk(id, email, { invite: "wrong" })).statusCode).toBe(403);
+      const ok = await clerk(id, email, { invite: "invite-123" });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toEqual({ ok: true, needsOnboarding: true });
+      // The invite is used up; the same person signs in again without it.
+      expect(ok.cookies.find((c) => c.name === "aia_invite")?.value).toBe("");
+      const again = await clerk(id, email);
+      expect(again.json()).toEqual({ ok: true, needsOnboarding: true });
+      const me = await app.inject({ method: "GET", url: "/me", headers: { cookie: session(ok) } });
+      expect(me.json()).toMatchObject({ displayName: "Ada Lovelace", email, onboarded: false });
+    });
+
+    it("refuses a forged or expired identity", async () => {
+      expect((await clerk("user_x", null, { secret: "x".repeat(40) })).statusCode).toBe(401);
+      expect((await clerk("user_x", null, { exp: Date.now() / 1000 - 1 })).statusCode).toBe(401);
+      const res = await app.inject({ method: "POST", url: "/auth/clerk", payload: {} });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("takes over an existing email + password account, keeping its chats", async () => {
+      const email = `legacy${Date.now()}@example.com`;
+      const up = await app.inject({
+        method: "POST",
+        url: "/auth/sign-up",
+        payload: { email, password: "long-enough-pw", inviteCode: "invite-123" },
+      });
+      const oldCookie = `aia_session=${up.cookies.find((c) => c.name === "aia_session")!.value}`;
+      const chat = await mainChatId(oldCookie);
+      // No invite needed: the account already exists. Email case doesn't matter.
+      const res = await clerk(`user_legacy_${Date.now()}`, email.toUpperCase());
+      expect(res.statusCode).toBe(200);
+      expect(await mainChatId(session(res))).toBe(chat);
+    });
+
+    it("saves the welcome answers once, birthday into the travel details", async () => {
+      const id = `user_welcome_${Date.now()}`;
+      const cookie = session(await clerk(id, `${id}@example.com`, { invite: "invite-123" }));
+      const bad = await app.inject({
+        method: "POST",
+        url: "/onboarding",
+        headers: { cookie },
+        payload: { dateOfBirth: "2999-01-01" },
+      });
+      expect(bad.statusCode).toBe(400);
+      const ok = await app.inject({
+        method: "POST",
+        url: "/onboarding",
+        headers: { cookie },
+        payload: { displayName: "Ada", dateOfBirth: "1990-12-10" },
+      });
+      expect(ok.statusCode).toBe(200);
+      const me = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
+      expect(me.json()).toMatchObject({ displayName: "Ada", onboarded: true });
+      const profile = await app.inject({
+        method: "GET",
+        url: "/travel-profile",
+        headers: { cookie },
+      });
+      expect(profile.json().profile.dateOfBirth).toBe("1990-12-10");
+      expect((await clerk(id, `${id}@example.com`)).json().needsOnboarding).toBe(false);
+    });
   });
 
   it("gives user B a 403 for user A's chat and run, before anything reaches Travila", async () => {

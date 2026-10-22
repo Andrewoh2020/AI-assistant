@@ -154,6 +154,30 @@ code {
   background: var(--surface-2);
   border-color: transparent;
 }
+/* Welcome questions after the first sign-in: one per screen, with progress dots. */
+.welcome h1 {
+  font-size: var(--type-h2-size);
+  line-height: 1.25;
+}
+.welcome p {
+  margin: 0;
+}
+.welcome-dots {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.welcome-dots li {
+  width: 24px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.welcome-dots li.on {
+  background: var(--ink);
+}
 .form-error {
   color: var(--danger);
   margin: 0;
