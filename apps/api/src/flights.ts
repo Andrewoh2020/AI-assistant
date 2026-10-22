@@ -712,12 +712,24 @@ export function checkinTask(c: Ctx, aliases: string[], site: string | null): str
     "Your final reply must start with exactly one of these:",
     '- CHECKED_IN {"flight":"UA123","date":"YYYY-MM-DD","lastName":"...","seat":"14A","group":"3","terminal":null,"gate":null,"skipped":["the paid extras you declined, with prices"],"boardingPass":true} (fill in what the boarding pass shows; null for anything not shown)',
     "- NOT_OPEN: when check-in opens, as the site says it",
-    "- AIRPORT_ONLY: the site's reason, in one sentence, when it says the passenger must check in at the airport (for example to check a passport or visa in person)",
+    "- AIRPORT_ONLY: when the site says the passenger must check in at the airport. Then give the reason the site shows, in one sentence (look on the page for it: a passport, visa or document check, a flight operated by another airline, or the route). If the site shows no reason, write exactly: no reason given",
     "- OPERATED_BY: the name of the airline that operates the flight, when the site says to check in with them instead",
     "- NEEDS_INFO: the exact question, in one sentence, when the site asks for something not given above (for example an emergency contact or an address)",
     "- NOT_FOUND: what the site said, when it can't find the booking",
     "- or NEEDS_SIGN_IN:, NEEDS_CODE:, BLOCKED: as in the rules above.",
   ].join("\n");
+}
+
+/** The airline's reason for airport-only check-in, or null when it gave none worth quoting. */
+export function airportReason(rest: string): string | null {
+  const why = oneLine(rest)
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!why || /no reason given/i.test(why)) return null;
+  // Only repeats the instruction ("Please check in at the airport."): no reason in it.
+  if (/^(please )?check[- ]in at the airport\.?$/i.test(why)) return null;
+  return why;
 }
 
 /** Hidden values every run in a flight's session gets (passport and similar), on its own site. */
@@ -850,13 +862,18 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       return at;
     }
     case "AIRPORT_ONLY": {
-      const why = oneLine(found.rest) || "The airline needs to see you at the desk.";
+      const why = airportReason(found.rest);
       await patch(c, { checkin_status: "airport", checkin_note: why });
       const desk = new Date(depart.getTime() - (c.facts.international ? 3 : 2) * HOUR);
+      const airline = airlineName(b, operatorOf(c));
       await tell(
         c,
         "airport",
-        `Please check in at the ${airlineName(b, operatorOf(c))} desk for ${flightName(b)}: online check-in isn't possible. The site said: "${why}" Aim to be at the airport by ${atAirport(desk, b.fromCode)}.`,
+        `Please check in at the ${airline} desk for ${flightName(b)}: ${airline}'s site won't check you in online. ${
+          why
+            ? `It said: "${why}"`
+            : `It didn't say why. The usual reasons are that they want to check your passport or visa in person (common on international trips, especially to the US), or that a leg is flown by a partner airline. Staff at the desk sort out either one in a few minutes.`
+        } Bring your passport and aim to be at the airport by ${atAirport(desk, b.fromCode)}.`,
       );
       return null;
     }

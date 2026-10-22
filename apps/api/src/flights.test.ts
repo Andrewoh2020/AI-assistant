@@ -5,7 +5,15 @@ import { airport, instantToLocal, localToInstant } from "./airports.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import type { FlightStatusSource, LiveFlight, RouteSource } from "./flightdata.js";
-import { factsFor, nextStatusAt, pickMode, planFlights, readMarker, tickAll } from "./flights.js";
+import {
+  airportReason,
+  factsFor,
+  nextStatusAt,
+  pickMode,
+  planFlights,
+  readMarker,
+  tickAll,
+} from "./flights.js";
 import { fileBooking } from "./gmail.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 import { bookingFrom } from "./tools.js";
@@ -129,6 +137,17 @@ describe("what a flight needs", () => {
     });
   });
 
+  it("quotes an airport-only reason only when the airline gave one", () => {
+    // What Qatar showed on 2026-10-22, with nothing to explain it.
+    expect(
+      airportReason("Please check in at the airport. https://cki.qatarairways.com/cki/dashboard"),
+    ).toBeNull();
+    expect(airportReason("no reason given")).toBeNull();
+    expect(airportReason("Travel documents must be verified at the airport for this route.")).toBe(
+      "Travel documents must be verified at the airport for this route.",
+    );
+  });
+
   it("reads the browser's answer only from the start of a line", () => {
     expect(readMarker('CHECKED_IN {"seat":"14A"}')).toEqual({
       marker: "CHECKED_IN",
@@ -221,8 +240,12 @@ afterAll(async () => {
   await sql?.end();
 });
 beforeEach(async () => {
-  // The scheduler looks at everyone's flights: start each test with none.
-  if (sql) await sql`DELETE FROM flight_plans`;
+  // The scheduler looks at everyone's flights (and everyone with Gmail connected, whose bookings
+  // it plans): start each test with none.
+  if (sql) {
+    await sql`DELETE FROM flight_plans`;
+    await sql`DELETE FROM connector_accounts WHERE provider = 'gmail'`;
+  }
   browser = new FakeBrowserUse();
   status = new FakeStatus();
   routes = new FakeRoutes();
