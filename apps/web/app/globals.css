@@ -430,10 +430,24 @@ code {
   right: 4px;
   opacity: 0;
 }
+/* The open chat's ⋯ always shows, so Share is easy to find; phones and tablets can't hover, so
+   there every row shows it. */
 .chat-row:hover .row-menu,
+.chat-row.is-current .row-menu,
 .chat-row:focus-within .row-menu,
 .row-menu:has([aria-expanded="true"]) {
   opacity: 1;
+}
+@media (hover: none) {
+  .chat-row .row-menu {
+    opacity: 1;
+  }
+  .chat-list .chat-row a {
+    padding-right: 36px;
+  }
+}
+.chat-list .chat-row.is-current a {
+  padding-right: 36px;
 }
 .pin {
   display: inline-grid;
