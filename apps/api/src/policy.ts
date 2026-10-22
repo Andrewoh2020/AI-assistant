@@ -19,7 +19,8 @@ const ALLOWED_TOOLS = new Set([
   "read_file",
   "memory_search",
   "list_trips",
-  "save_booking",
+  "save_flight",
+  "save_hotel",
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -44,11 +45,7 @@ export async function decide(
   // Reads only the person's own trips (row-level security); it takes nothing in.
   if (tool === "list_trips") return { decision: "allow" };
   // Adds to the person's own trips only; the shape is checked when it runs.
-  if (tool === "save_booking") {
-    if (args.kind !== "flight" && args.kind !== "hotel")
-      return { decision: "deny", reason: "kind must be flight or hotel" };
-    return { decision: "allow" };
-  }
+  if (tool === "save_flight" || tool === "save_hotel") return { decision: "allow" };
   if (tool === "read_file") {
     // Row-level security keeps it to the user's own files; this only checks the shape.
     if (typeof args.file_id !== "string" || !UUID.test(args.file_id))

@@ -16,6 +16,7 @@ import {
 import { cleanFileName } from "./files.js";
 import { extractText } from "./extract.js";
 import { jobTitle, plainAsk } from "./browser.js";
+import { TOOLS } from "@ai-assistant/agent";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -110,6 +111,23 @@ describe("sessions and passwords", () => {
     const h = await hashPassword("pw-1234567890");
     expect(await verifyPassword("pw-1234567890", h)).toBe(true);
     expect(await verifyPassword("wrong", h)).toBe(false);
+  });
+});
+
+describe("tool list", () => {
+  it("lets every tool the model is given through the policy gate's name check", async () => {
+    for (const tool of TOOLS) {
+      const d = await decide(tool.name, {});
+      expect(d.decision === "deny" && d.reason.startsWith("Unknown tool")).toBe(false);
+    }
+  });
+
+  it("requires the flight details check-in needs", () => {
+    // With them all optional, the model sent only the arrival airport (seen 2026-10-22).
+    const flight = TOOLS.find((t) => t.name === "save_flight")!;
+    expect(flight.parametersJsonSchema.required).toEqual(
+      expect.arrayContaining(["flight_number", "from_code", "to_code", "depart_at"]),
+    );
   });
 });
 

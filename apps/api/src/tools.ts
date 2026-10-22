@@ -256,15 +256,20 @@ export async function runTool(
       return { trips: tripsText(trips) };
     }
 
-    if (call.name === "save_booking") {
-      const booking = bookingFrom(args);
+    if (call.name === "save_flight" || call.name === "save_hotel") {
+      const booking = bookingFrom({
+        ...args,
+        kind: call.name === "save_flight" ? "flight" : "hotel",
+      });
       if ("error" in booking) {
         await finishToolCall(ctx, toolCallId, {
           status: "failed",
           decision: "allow",
           reason: booking.error,
         });
-        return { error: booking.error };
+        return {
+          error: `Not saved: ${booking.error} Fix it and try once more; if it fails again, tell the user it wasn't saved.`,
+        };
       }
       const isNew = await withUser(ctx.sql, ctx.userId, (tx) =>
         fileBooking(tx, ctx.userId, { ...booking, status: "confirmed" }, null),
@@ -301,7 +306,7 @@ export async function runTool(
 const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** A booking from save_booking's arguments, checked; or the problem in a sentence. */
+/** A booking from save_flight's or save_hotel's arguments (plus a kind), checked; or the problem in a sentence. */
 export function bookingFrom(args: Record<string, unknown>): Booking | { error: string } {
   const text = (k: string, max = 120) => {
     const v = args[k];
@@ -366,7 +371,8 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (calls.some((c) => c.name === "read_file")) return "Reading your file";
   if (calls.some((c) => c.name === "memory_search")) return "Checking what I remember";
   if (calls.some((c) => c.name === "list_trips")) return "Checking your trips";
-  if (calls.some((c) => c.name === "save_booking")) return "Saving your booking";
+  if (calls.some((c) => c.name === "save_flight" || c.name === "save_hotel"))
+    return "Saving your booking";
   return "Working";
 }
 
