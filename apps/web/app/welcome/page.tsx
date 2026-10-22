@@ -127,7 +127,7 @@ export default function Welcome() {
                 </li>
               ))}
             </ul>
-            <p className="muted">You can disconnect anytime in Settings.</p>
+            <p className="muted">And much more to come. You can disconnect anytime in Settings.</p>
           </>
         )}
 
