@@ -10,44 +10,50 @@ import {
 } from "./bookings.js";
 import { loadConfig } from "./config.js";
 import { checkState, describeBooking, signState, when } from "./gmail.js";
-import { GoogleAuthError, GMAIL_SCOPE, type Google, type MailMessage } from "./google.js";
+import { GoogleAuthError, type Google, type MailMessage } from "./google.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 
-/** Google's sign-in and Gmail, played from memory. */
+/** Travila's connected apps and Gmail, played from memory. */
 class FakeGoogle implements Google {
   available = true;
   mail: MailMessage[] = [];
   tokenWorks = true;
-  revoked: string[] = [];
-  fetched: string[] = [];
+  /** Travila user ids that finished the connect page. */
+  connected = new Set<string>();
+  lastAsker = "";
+  disconnected: string[] = [];
   queries: string[] = [];
   email = "traveller@gmail.com";
 
-  authUrl(redirectUri: string, state: string) {
-    return `https://accounts.google.com/o/oauth2/v2/auth?redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+  async connectUrl(travilaUserId: string, successUrl: string, errorUrl: string) {
+    if (!this.available) throw new Error("Pipedream Connect isn't enabled");
+    this.lastAsker = travilaUserId;
+    return `https://pipedream.com/_static/connect.html?${new URLSearchParams({ successUrl, errorUrl })}`;
   }
-  async exchangeCode(code: string) {
-    if (code !== "good-code") throw new GoogleAuthError("bad code");
-    return { refreshToken: "refresh-SECRET-1", email: this.email, scopes: GMAIL_SCOPE };
+  async connectedAccount(travilaUserId: string) {
+    return this.connected.has(travilaUserId)
+      ? { accountId: `apn_SECRET_${travilaUserId.slice(-6)}`, email: this.email }
+      : null;
   }
-  async accessToken(refresh: string) {
-    if (!this.tokenWorks || refresh !== "refresh-SECRET-1") throw new GoogleAuthError("expired");
-    return "access-1";
+  async open(travilaUserId: string, accountId: string) {
+    if (!this.tokenWorks || !this.connected.has(travilaUserId) || !accountId.startsWith("apn_")) {
+      throw new GoogleAuthError("gone");
+    }
+    return {
+      listMessages: async (query: string, max: number) => {
+        this.queries.push(query);
+        // Gmail lists newest first.
+        return [...this.mail]
+          .sort((a, b) => b.date.getTime() - a.date.getTime())
+          .slice(0, max)
+          .map((m) => m.id);
+      },
+      getMessage: async (id: string) => this.mail.find((m) => m.id === id)!,
+    };
   }
-  async listMessages(_access: string, query: string, max: number) {
-    this.queries.push(query);
-    // Gmail lists newest first.
-    return [...this.mail]
-      .sort((a, b) => b.date.getTime() - a.date.getTime())
-      .slice(0, max)
-      .map((m) => m.id);
-  }
-  async getMessage(_access: string, id: string) {
-    this.fetched.push(id);
-    return this.mail.find((m) => m.id === id)!;
-  }
-  async revoke(token: string) {
-    this.revoked.push(token);
+  async disconnect(travilaUserId: string, accountId: string) {
+    this.disconnected.push(accountId);
+    this.connected.delete(travilaUserId);
   }
 }
 
@@ -150,8 +156,8 @@ const settle = async () => {
   while (pending.length) await Promise.all(pending.splice(0));
 };
 
-/** Goes through Google's sign-in the way a browser would, and waits for the first check. */
-async function connect(cookie: string) {
+/** Starts connecting, finishes the connect page, and comes back (then waits for the first check). */
+async function startConnect(cookie: string) {
   const start = await app.inject({
     method: "GET",
     url: "/connectors/gmail/start",
@@ -159,15 +165,27 @@ async function connect(cookie: string) {
   });
   expect(start.statusCode).toBe(302);
   const to = new URL(start.headers.location as string);
-  expect(to.searchParams.get("redirect_uri")).toBe(
-    "http://localhost:3000/api/connectors/gmail/callback",
-  );
-  const state = to.searchParams.get("state")!;
-  const back = await app.inject({
+  expect(to.hostname).toBe("pipedream.com");
+  return {
+    success: to.searchParams.get("successUrl")!,
+    error: to.searchParams.get("errorUrl")!,
+  };
+}
+
+const backFrom = (url: string, cookie: string) => {
+  const u = new URL(url);
+  expect(u.origin + u.pathname).toBe("http://localhost:3000/api/connectors/gmail/callback");
+  return app.inject({
     method: "GET",
-    url: `/connectors/gmail/callback?code=good-code&state=${encodeURIComponent(state)}`,
+    url: u.pathname.replace(/^\/api/, "") + u.search,
     headers: { cookie, host: "localhost:3000" },
   });
+};
+
+async function connect(cookie: string) {
+  const links = await startConnect(cookie);
+  google.connected.add(google.lastAsker);
+  const back = await backFrom(links.success, cookie);
   expect(back.statusCode).toBe(302);
   expect(back.headers.location).toMatch(/\?settings=connections&gmail=connected$/);
   await settle();
@@ -335,7 +353,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     expect((await mainMessages(cookie)).length).toBe(before);
   });
 
-  it("asks to reconnect when Google ends the connection, and disconnecting cancels the token", async () => {
+  it("asks to reconnect when the connection stops working, and disconnecting removes it", async () => {
     const cookie = await signUp();
     await connect(cookie);
     google.tokenWorks = false;
@@ -352,29 +370,20 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
       headers: { cookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(google.revoked).toContain("refresh-SECRET-1");
+    expect(google.disconnected).toHaveLength(1);
     expect(await status(cookie)).toMatchObject({ connected: false, needsReconnect: false });
   });
 
-  it("refuses a Google answer meant for someone else, and keeps trips private", async () => {
+  it("refuses a connection meant for someone else, and keeps trips private", async () => {
     const alice = await signUp();
     const bob = await signUp();
     google.mail = [mailOf("b1")];
     reader.byMail.set("b1", [flight()]);
     await connect(alice);
 
-    // Bob's browser lands on Alice's sign-in answer: refused.
-    const start = await app.inject({
-      method: "GET",
-      url: "/connectors/gmail/start",
-      headers: { cookie: alice },
-    });
-    const state = new URL(start.headers.location as string).searchParams.get("state")!;
-    const back = await app.inject({
-      method: "GET",
-      url: `/connectors/gmail/callback?code=good-code&state=${encodeURIComponent(state)}`,
-      headers: { cookie: bob },
-    });
+    // Bob's browser lands on Alice's way back from the connect page: refused.
+    const links = await startConnect(alice);
+    const back = await backFrom(links.success, bob);
     expect(back.headers.location).toMatch(/gmail=failed$/);
     const b = await status(bob);
     expect(b.connected).toBe(false);
@@ -382,14 +391,13 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     expect((await status(alice)).trips).toHaveLength(1);
   });
 
-  it("says when Google's sign-in was cancelled or Gmail isn't set up", async () => {
+  it("says when connecting was cancelled, didn't connect, or isn't available", async () => {
     const cookie = await signUp();
-    const res = await app.inject({
-      method: "GET",
-      url: "/connectors/gmail/callback?error=access_denied&state=x",
-      headers: { cookie },
-    });
-    expect(res.headers.location).toMatch(/gmail=cancelled$/);
+    const links = await startConnect(cookie);
+    expect((await backFrom(links.error, cookie)).headers.location).toMatch(/gmail=cancelled$/);
+    // Sent back as if it worked, but no account was connected.
+    expect((await backFrom(links.success, cookie)).headers.location).toMatch(/gmail=cancelled$/);
+    expect((await status(cookie)).connected).toBe(false);
     google.available = false;
     const start = await app.inject({
       method: "GET",

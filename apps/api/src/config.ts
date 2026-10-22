@@ -14,9 +14,6 @@ export interface Config {
   /** People need this code to create an account. Empty disables sign-up. */
   signupCode: string;
   secureCookies: boolean;
-  /** The Google app (OAuth client) used to connect Gmail. Empty: Gmail can't be connected. */
-  googleClientId: string;
-  googleClientSecret: string;
   /** The site's own address, like "https://example.com"; empty: taken from each request. */
   publicUrl: string;
   /** FlightAware AeroAPI, for live flight status. Empty: the trip card shows booked times. */
@@ -47,8 +44,6 @@ export function loadConfig(env = process.env): Config {
     vaultMasterKey: env.VAULT_MASTER_KEY ?? "",
     signupCode: env.SIGNUP_CODE ?? "",
     secureCookies: hosted,
-    googleClientId: env.GOOGLE_CLIENT_ID ?? "",
-    googleClientSecret: env.GOOGLE_CLIENT_SECRET ?? "",
     publicUrl: (env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
     flightAwareKey: env.FLIGHTAWARE_API_KEY ?? "",
     googleMapsKey: env.GOOGLE_MAPS_API_KEY ?? "",
