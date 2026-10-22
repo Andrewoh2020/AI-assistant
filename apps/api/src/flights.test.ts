@@ -352,6 +352,80 @@ const prep = {
   noBannedItems: true,
 };
 
+describe.skipIf(!process.env.DATABASE_URL)(
+  "a trip with a connection, check-in already open",
+  () => {
+    it("shows the card with the reminder, and one save covers both legs", async () => {
+      const { cookie, userId } = await signUp();
+      // Mumbai to Doha to Philadelphia, leaving in 12 hours (seen 2026-10-22: the card got lost).
+      const leg1 = new Date(now.getTime() + 12 * H);
+      const leg2 = new Date(leg1.getTime() + 5 * H);
+      const legs = [
+        { flightNumber: "QR 4791", fromCode: "BOM", toCode: "DOH", at: leg1 },
+        { flightNumber: "QR 727", fromCode: "DOH", toCode: "PHL", at: leg2 },
+      ];
+      await withUser(sql!, userId, async (tx) => {
+        for (const l of legs) {
+          await fileBooking(
+            tx,
+            userId,
+            {
+              kind: "flight",
+              status: "confirmed",
+              airline: "Qatar Airways",
+              flightNumber: l.flightNumber,
+              fromCode: l.fromCode,
+              fromCity: null,
+              toCode: l.toCode,
+              toCity: null,
+              departAt: local(l.at, l.fromCode),
+              arriveAt: null,
+              confirmation: "9G39Y8",
+            },
+            null,
+          );
+        }
+      });
+      await planFlights({ sql: sql!, now: () => now }, userId);
+      await tick();
+
+      // The "check-in is open" message carries the card itself, so the form is right there.
+      const chats = (
+        await app.inject({ method: "GET", url: "/chats", headers: { cookie } })
+      ).json();
+      const main = chats.chats.find((c: { kind: string }) => c.kind === "main");
+      const messages = (
+        await app.inject({ method: "GET", url: `/chats/${main.id}`, headers: { cookie } })
+      ).json().messages as { text: string; flight: FlightView | null }[];
+      const nudges = messages.filter((m) => m.text.startsWith("Check-in for QR"));
+      expect(nudges).toHaveLength(2);
+      expect(nudges.every((m) => m.flight?.prep.required.includes("passportNumber"))).toBe(true);
+
+      // Filled in once, on one leg's card: both legs get the details and the tick, and both start.
+      const [first] = await flights(cookie);
+      const saved = await app.inject({
+        method: "POST",
+        url: `/flights/${first!.id}/prep`,
+        headers: { cookie },
+        payload: prep,
+      });
+      expect(saved.statusCode).toBe(200);
+      await settle();
+      const both = await flights(cookie);
+      expect(both.map((f) => [f.prep.required, f.prep.noBannedItems])).toEqual([
+        [[], true],
+        [[], true],
+      ]);
+      browser.scripts.push(
+        { polls: 5, result: "still going" },
+        { polls: 5, result: "still going" },
+      );
+      await tick();
+      expect(browser.runs.size).toBe(2);
+    });
+  },
+);
+
 describe.skipIf(!process.env.DATABASE_URL)("a flight from booking to landing", () => {
   it("asks once, checks in by itself, files the arrival card and says when to leave", async () => {
     const { cookie, userId } = await signUp();

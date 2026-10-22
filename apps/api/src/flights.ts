@@ -471,10 +471,11 @@ async function patch(c: Ctx, fields: Record<string, unknown>) {
   if (row) c.plan = row;
 }
 
-async function tell(c: Ctx, key: string | null, text: string) {
+/** Posts a message in the Main chat once per key; withCard puts the trip card under it. */
+async function tell(c: Ctx, key: string | null, text: string, withCard = false) {
   if (key && c.plan.sent.includes(key)) return;
   await withUser(c.deps.sql, c.userId, async (tx) => {
-    await say(tx, c.userId, text);
+    await say(tx, c.userId, text, withCard ? { tripItemId: c.plan.trip_item_id } : undefined);
     if (key) {
       await tx`UPDATE flight_plans SET sent = array_append(sent, ${key})
                WHERE trip_item_id = ${c.plan.trip_item_id}`;
@@ -541,7 +542,8 @@ async function stepCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       await tell(
         c,
         "prep_reminder",
-        `I still need ${list(missing)} to check you in for ${flightName(b)} when check-in opens (${atAirport(due, b.fromCode)}). Add it on the trip card; it takes a few seconds.`,
+        `I still need ${list(missing)} to check you in for ${flightName(b)} when check-in opens (${atAirport(due, b.fromCode)}). Add it here; it takes a few seconds.`,
+        true,
       );
     }
     return missing.length && now < remindAt ? remindAt : due;
@@ -554,14 +556,16 @@ async function stepCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       await tell(
         c,
         "checkin_missing",
-        `Check-in for ${flightName(b)} is open. I'll check you in as soon as you add ${list(missing)} on the trip card.`,
+        `Check-in for ${flightName(b)} is open. I'll check you in as soon as you add ${list(missing)} here.`,
+        true,
       );
       return lastCall;
     }
     await tell(
       c,
       "last_nudge",
-      `${flightName(b)} leaves at ${atAirport(depart, b.fromCode)} and I still can't check you in without ${list(missing)}. Add it on the trip card, or check in yourself on ${checkinSite(c)}${b.confirmation ? ` with booking ${b.confirmation}` : ""}.`,
+      `${flightName(b)} leaves at ${atAirport(depart, b.fromCode)} and I still can't check you in without ${list(missing)}. Add it here, or check in yourself on ${checkinSite(c)}${b.confirmation ? ` with booking ${b.confirmation}` : ""}.`,
+      true,
     );
     return null;
   }
@@ -816,8 +820,9 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
         c,
         `ask:${s.id}`,
         s.ask_kind === "code"
-          ? `${airlineName(b, operatorOf(c))} sent you a code to finish check-in for ${flightName(b)}. Type it in the secure box on the trip card.`
-          : `${airlineName(b, operatorOf(c))} wants you to sign in to check in for ${flightName(b)}. Use the secure box on the trip card; I'll finish the rest. Your login is typed only into ${s.ask_site}.`,
+          ? `${airlineName(b, operatorOf(c))} sent you a code to finish check-in for ${flightName(b)}. Type it in the secure box below.`
+          : `${airlineName(b, operatorOf(c))} wants you to sign in to check in for ${flightName(b)}. Use the secure box below; I'll finish the rest. Your login is typed only into ${s.ask_site}.`,
+        true,
       );
     }
     return new Date(c.now.getTime() + 20000);
@@ -876,7 +881,8 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       await tell(
         c,
         `question:${q}`,
-        `${airlineName(b, operatorOf(c))} is asking: "${q}" Answer it on the trip card and I'll finish checking you in for ${flightName(b)}. I'll remember the answer for next time.`,
+        `${airlineName(b, operatorOf(c))} is asking: "${q}" Answer it below and I'll finish checking you in for ${flightName(b)}. I'll remember the answer for next time.`,
+        true,
       );
       return new Date(depart.getTime() - BACKUP_BEFORE_H * HOUR);
     }
@@ -1025,7 +1031,8 @@ async function stepArrival(c: Ctx): Promise<Date | null> {
     await tell(
       c,
       "arrival_missing",
-      `Your ${form.form} can be filed now. I need ${list(missing)}; add it on the trip card and I'll do the rest.`,
+      `Your ${form.form} can be filed now. I need ${list(missing)}; add it here and I'll do the rest.`,
+      true,
     );
     return null;
   }
@@ -1037,7 +1044,8 @@ async function stepArrival(c: Ctx): Promise<Date | null> {
     await tell(
       c,
       "arrival_ready",
-      `Your ${form.form} is ready to file for ${flightName(b)}. The health and customs answers are your own statement, so check them on the trip card and tap "Looks right, submit".`,
+      `Your ${form.form} is ready to file for ${flightName(b)}. The health and customs answers are your own statement, so check them below and tap "Looks right, submit".`,
+      true,
     );
     // One reminder the day before landing.
     const remind = arrive ? new Date(arrive.getTime() - 24 * HOUR) : null;
@@ -1141,7 +1149,7 @@ async function followArrival(c: Ctx, form: (typeof ARRIVAL_CARDS)[string]): Prom
       await tell(
         c,
         `ask:${s.id}`,
-        `The ${form.form} site sent you a code. Type it in the secure box on the trip card.`,
+        `The ${form.form} site sent you a code. Type it in the secure box below.`,
       );
     }
     return new Date(c.now.getTime() + 20000);
@@ -1171,7 +1179,7 @@ async function followArrival(c: Ctx, form: (typeof ARRIVAL_CARDS)[string]): Prom
     await tell(
       c,
       `aquestion:${q}`,
-      `The ${form.form} asks: "${q}" Answer it on the trip card and I'll finish filing it.`,
+      `The ${form.form} asks: "${q}" Answer it below and I'll finish filing it.`,
     );
     return null;
   }
@@ -1464,6 +1472,23 @@ export async function afterPrep(
     }
     if (plan.arrival_status === "waiting_for_you") fields.arrival_status = "scheduled";
     await tx`UPDATE flight_plans SET ${tx(fields)} WHERE trip_item_id = ${itemId}`;
+    // The "no banned items" tick is for the whole trip, so every leg of it gets it.
+    if (input.noBannedItems !== undefined) {
+      await tx`UPDATE flight_plans p SET no_banned_items = ${input.noBannedItems}
+               FROM trip_items i
+               WHERE i.id = p.trip_item_id
+                 AND i.trip_id = (SELECT trip_id FROM trip_items WHERE id = ${itemId})`;
+    }
+    // Travel details are shared by all flights, so others waiting on them get another go too.
+    await tx`UPDATE flight_plans SET next_due_at = ${now}, poked = true, updated_at = ${now},
+               checkin_status = CASE WHEN checkin_status = 'waiting_for_you' THEN 'scheduled'
+                                     ELSE checkin_status END,
+               checkin_due_at = CASE WHEN checkin_status = 'waiting_for_you' THEN ${now}
+                                     ELSE checkin_due_at END,
+               arrival_status = CASE WHEN arrival_status = 'waiting_for_you' THEN 'scheduled'
+                                     ELSE arrival_status END
+             WHERE trip_item_id <> ${itemId}
+               AND (checkin_status = 'waiting_for_you' OR arrival_status = 'waiting_for_you')`;
   });
 }
 
