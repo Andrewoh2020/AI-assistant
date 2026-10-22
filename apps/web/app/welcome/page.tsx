@@ -8,6 +8,15 @@ import { api } from "@/lib/client";
 type Step = "name" | "birthday" | "gmail";
 const STEPS: Step[] = ["name", "birthday", "gmail"];
 
+// Why connecting Gmail is worth it (Andrew, 2026-10-22: trips alone undersell it).
+const GMAIL_EXAMPLES: [string, string][] = [
+  ["✈️", "Checking you in for flights and keeping hotel stays on your trip"],
+  ["📦", "Tracking packages and telling you when they'll arrive"],
+  ["🧾", "Reminding you before bills, renewals and free trials come due"],
+  ["🎟️", "Keeping tickets, reservations and appointments in one place"],
+  ["🔑", "Grabbing sign-in codes so I can finish tasks without asking you"],
+];
+
 /**
  * The welcome questions, once, after someone's first sign-in: one short question per screen,
  * each one skippable. Answers are kept so the assistant never asks them again.
@@ -108,11 +117,17 @@ export default function Welcome() {
 
         {step === "gmail" && (
           <>
-            <h1>Want me to keep track of your trips?</h1>
-            <p className="muted">
-              Connect Gmail and I'll find your flight and hotel bookings, then check you in when it
-              opens. I only look for bookings. You can disconnect anytime in Settings.
-            </p>
+            <h1>Let me keep an eye on your inbox</h1>
+            <p className="muted">Connect Gmail and I can take care of things like:</p>
+            <ul className="welcome-list">
+              {GMAIL_EXAMPLES.map(([icon, text]) => (
+                <li key={text}>
+                  <span aria-hidden="true">{icon}</span>
+                  {text}
+                </li>
+              ))}
+            </ul>
+            <p className="muted">You can disconnect anytime in Settings.</p>
           </>
         )}
 

@@ -162,6 +162,19 @@ code {
 .welcome p {
   margin: 0;
 }
+.welcome-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.welcome-list li {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 8px;
+  align-items: start;
+}
 .welcome-dots {
   display: flex;
   gap: 6px;
