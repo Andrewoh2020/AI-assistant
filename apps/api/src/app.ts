@@ -14,6 +14,7 @@ import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
 import { BadRequest } from "./errors.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
+import { readShareToken, sharedChat, shareToken } from "./share.js";
 import { extractText } from "./extract.js";
 import { DeepSeekBookingReader, type BookingReader } from "./bookings.js";
 import {
@@ -371,6 +372,28 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       req.params.id,
     );
     return { chat: chatSummary(chat), messages, activeRun, endedRuns };
+  });
+
+  // Share links: the owner makes one; anyone with it can read the chat (numbers hidden).
+  app.post<{ Params: { id: string } }>("/chats/:id/share", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("chat");
+    const { chat } = await getChat(orchestratorDeps, s, req.params.id);
+    const { token, expiresAt } = shareToken(chat.id, s.userId, config.sessionSecret);
+    return { path: `/share/${token}`, expiresAt: expiresAt.toISOString() };
+  });
+
+  app.get<{ Params: { token: string } }>("/share/:token", async (req, reply) => {
+    reply.header("Cache-Control", "no-store").header("X-Robots-Tag", "noindex");
+    const claims = readShareToken(req.params.token, config.sessionSecret);
+    if (!claims || !UUID.test(claims.chatId)) {
+      return reply.code(404).send({ error: "This link doesn't work any more. Ask for a new one." });
+    }
+    const owner = { userId: claims.userId, travilaUserId: "", timezone: "UTC" };
+    const { chat, messages } = await getChat(orchestratorDeps, owner, claims.chatId);
+    const title = chat.kind === "main" ? "Main chat" : (chat.title ?? "Side chat");
+    return { chat: sharedChat(title, messages, claims.expiresAt) };
   });
 
   app.post<{ Params: { id: string } }>("/chats/:id/messages", async (req, reply) => {
