@@ -446,6 +446,56 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await tick();
       expect(browser.runs.size).toBe(2);
     });
+
+    it("files legs saved at the same moment into one trip, with one card each", async () => {
+      const { cookie, userId } = await signUp();
+      // The assistant saves both legs at once (seen 2026-10-22: each leg's card posted twice, and
+      // the legs filed as two trips).
+      const leg1 = new Date(now.getTime() + 40 * H);
+      const legs = [
+        { flightNumber: "QR 4791", fromCode: "BOM", toCode: "DOH", at: leg1 },
+        {
+          flightNumber: "QR 727",
+          fromCode: "DOH",
+          toCode: "PHL",
+          at: new Date(leg1.getTime() + 4 * H),
+        },
+      ];
+      await Promise.all(
+        legs.map(async (l) => {
+          await withUser(sql!, userId, (tx) =>
+            fileBooking(
+              tx,
+              userId,
+              {
+                kind: "flight",
+                status: "confirmed",
+                airline: "Qatar Airways",
+                flightNumber: l.flightNumber,
+                fromCode: l.fromCode,
+                fromCity: null,
+                toCode: l.toCode,
+                toCity: null,
+                departAt: local(l.at, l.fromCode),
+                arriveAt: null,
+                confirmation: "QX7P2L",
+              },
+              null,
+            ),
+          );
+          await planFlights({ sql: sql!, now: () => now }, userId);
+        }),
+      );
+      const trips = await sql!`SELECT DISTINCT trip_id FROM trip_items WHERE user_id = ${userId}`;
+      expect(trips).toHaveLength(1);
+      // Booked less than a day before the reminder would be due: the cards ask, and no reminder
+      // repeats it straight away.
+      await tick();
+      const texts = await mainTexts(cookie);
+      expect(texts.filter((t) => t.startsWith("QR 4791 to"))).toHaveLength(1);
+      expect(texts.filter((t) => t.startsWith("QR 727 to"))).toHaveLength(1);
+      expect(texts.some((t) => t.startsWith("I still need"))).toBe(false);
+    });
   },
 );
 
@@ -601,12 +651,14 @@ describe.skipIf(!process.env.DATABASE_URL)("a flight from booking to landing", (
 
   it("asks for what's missing when check-in opens, then a backup link before it's too late", async () => {
     const { cookie, userId } = await signUp();
-    const depart = await bookTrip(userId, 30);
-    // A day before check-in opens it's already within reach: a reminder.
+    const depart = await bookTrip(userId, 60);
+    // Nothing straight away (the card has just asked), then one reminder the day before check-in opens.
     await tick();
-    expect(
-      (await mainTexts(cookie)).some((t) => t.startsWith("I still need your name as on your ID")),
-    ).toBe(true);
+    const reminder = (t: string) => t.startsWith("I still need your name as on your ID");
+    expect((await mainTexts(cookie)).some(reminder)).toBe(false);
+    now = new Date(depart.getTime() - 48 * H);
+    await tick();
+    expect((await mainTexts(cookie)).filter(reminder)).toHaveLength(1);
     now = new Date(depart.getTime() - 23 * H);
     await tick();
     expect((await mainTexts(cookie)).some((t) => t.startsWith("Check-in for UA 1 is open"))).toBe(

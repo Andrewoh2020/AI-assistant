@@ -265,8 +265,9 @@ export async function fileBooking(
 ): Promise<boolean> {
   const key = dedupeKey(b);
   const { status, ...details } = b;
-  // The same booking saved twice at once (parallel tool calls) would otherwise both insert.
-  await tx`SELECT pg_advisory_xact_lock(hashtext(${userId + ":" + key}))`;
+  // Bookings saved at once (parallel tool calls) are filed one at a time, so the same booking isn't
+  // inserted twice and the legs of one journey land in one trip instead of a trip each.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${userId + ":trips"}))`;
   const [existing] = await tx<
     { id: string; trip_id: string; details: Record<string, unknown> | null }[]
   >`SELECT id, trip_id, details FROM trip_items WHERE dedupe_key = ${key}`;
