@@ -25,7 +25,7 @@ import {
   syncIfDue,
   type GmailDeps,
 } from "./gmail.js";
-import { GoogleAuthError, GoogleHttp, type Google } from "./google.js";
+import { GoogleAuthError, TravilaGmail, type Google } from "./google.js";
 import {
   advanceRun,
   Conflict,
@@ -71,7 +71,7 @@ export interface AppDeps {
   defer?: (work: Promise<unknown>) => void;
   resolve?: Resolver;
   browserCheckGapMs?: number;
-  /** Google sign-in and Gmail; built from the config when left out. */
+  /** Gmail through Travila's connected apps; built from the config when left out. */
   google?: Google;
   /** Reads bookings out of emails; DeepSeek when left out. */
   bookingReader?: BookingReader;
@@ -114,7 +114,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   };
   const gmailDeps: GmailDeps = {
     sql,
-    google: deps.google ?? new GoogleHttp(config.googleClientId, config.googleClientSecret),
+    google: deps.google ?? new TravilaGmail(config.travilaBase, config.travilaKey),
     reader:
       deps.bookingReader ?? new DeepSeekBookingReader(config.deepseekBase, config.deepseekKey),
     vaultKey,
@@ -723,13 +723,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   );
 
   // Gmail ---------------------------------------------------------------------------------------
-  // Connect with Google's sign-in, then the app reads booking emails (read-only) to find trips.
+  // Connected on Travila's hosted connect page (Pipedream), then the app reads booking emails to
+  // find trips.
 
-  const gmailCallback = (req: FastifyRequest) => {
+  const gmailCallback = (req: FastifyRequest, state: string, outcome: "ok" | "error") => {
     const base =
       config.publicUrl ||
       `${config.secureCookies ? "https" : String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers["x-forwarded-host"] ?? req.headers.host}`;
-    return `${base}/api/connectors/gmail/callback`;
+    return `${base}/api/connectors/gmail/callback?${new URLSearchParams({ state, outcome })}`;
   };
 
   /** Back to the Main chat with Settings open on Connected accounts. */
@@ -747,31 +748,38 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.get("/connectors/gmail/start", async (req, reply) => {
-    if (!req.session) return reply.redirect("/sign-in");
-    if (!gmailDeps.google.available) return backToSettings(req.session, reply, "unavailable");
-    return reply.redirect(
-      gmailDeps.google.authUrl(
-        gmailCallback(req),
-        signState(req.session.userId, config.sessionSecret),
-      ),
-    );
+    const s = req.session;
+    if (!s) return reply.redirect("/sign-in");
+    const state = signState(s.userId, config.sessionSecret);
+    let url;
+    try {
+      url = await gmailDeps.google.connectUrl(
+        s.travilaUserId,
+        gmailCallback(req, state, "ok"),
+        gmailCallback(req, state, "error"),
+      );
+    } catch (err) {
+      app.log.error(err);
+      return backToSettings(s, reply, "unavailable");
+    }
+    return reply.redirect(url);
   });
 
-  app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+  app.get<{ Querystring: { state?: string; outcome?: string } }>(
     "/connectors/gmail/callback",
     async (req, reply) => {
       const s = req.session;
       if (!s) return reply.redirect("/sign-in");
-      const { code, state, error } = req.query;
-      if (error || !code) return backToSettings(s, reply, "cancelled");
+      const { state, outcome } = req.query;
       if (!state || !checkState(state, s.userId, config.sessionSecret)) {
         return backToSettings(s, reply, "failed");
       }
+      if (outcome !== "ok") return backToSettings(s, reply, "cancelled");
       try {
-        await connectGmail(gmailDeps, s.userId, code, gmailCallback(req));
+        await connectGmail(gmailDeps, s.userId, s.travilaUserId);
       } catch (err) {
         if (!(err instanceof GoogleAuthError)) app.log.error(err);
-        return backToSettings(s, reply, err instanceof GoogleAuthError ? "denied" : "failed");
+        return backToSettings(s, reply, err instanceof GoogleAuthError ? "cancelled" : "failed");
       }
       later(syncGmail(gmailDeps, s.userId));
       return backToSettings(s, reply, "connected");
@@ -781,7 +789,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.delete("/connectors/gmail", async (req, reply) => {
     const s = requireSession(req, reply);
     if (!s) return;
-    await disconnectGmail(gmailDeps, s.userId);
+    await disconnectGmail(gmailDeps, s.userId, s.travilaUserId);
     return { ok: true };
   });
 

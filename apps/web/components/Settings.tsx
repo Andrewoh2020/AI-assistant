@@ -27,7 +27,7 @@ type Page =
   { name: "home" } | { name: "vault" } | { name: "login"; id: string } | { name: "connections" };
 
 /** How connecting Gmail went, from Google's sign-in coming back to the app. */
-export type GmailResult = "connected" | "cancelled" | "denied" | "failed" | "unavailable";
+export type GmailResult = "connected" | "cancelled" | "failed" | "unavailable";
 
 export function Settings({
   start = "home",
@@ -206,10 +206,8 @@ export function Settings({
 const RESULT_TEXT: Record<GmailResult, string> = {
   connected: "Gmail is connected. Looking for your bookings now.",
   cancelled: "Gmail wasn't connected.",
-  denied:
-    "Gmail wasn't connected, because reading mail wasn't allowed. Connect again and leave the Gmail box ticked.",
   failed: "Gmail couldn't be connected. Try again.",
-  unavailable: "Gmail can't be connected on this copy of the app yet.",
+  unavailable: "Gmail can't be connected right now. Try again later.",
 };
 
 function ConnectionsPage({
@@ -282,13 +280,11 @@ function ConnectionsPage({
                 : gmail.connected
                   ? (gmail.email ?? "Connected")
                   : gmail.needsReconnect
-                    ? `${gmail.email ?? "Gmail"} · Google ended the connection`
+                    ? `${gmail.email ?? "Gmail"} · The connection stopped working`
                     : "Not connected"}
             </span>
           </span>
-          {gmail?.available &&
-            !gmail.connected &&
-            connect(gmail.needsReconnect ? "Reconnect" : "Connect")}
+          {gmail && !gmail.connected && connect(gmail.needsReconnect ? "Reconnect" : "Connect")}
         </div>
         {gmail?.connected && (
           <Detail
@@ -297,9 +293,6 @@ function ConnectionsPage({
           />
         )}
       </div>
-      {gmail && !gmail.available && !gmail.connected && (
-        <p className="group-note">Gmail can&apos;t be connected on this copy of the app yet.</p>
-      )}
       {gmail && (gmail.connected || gmail.trips.length > 0) && (
         <>
           <h3 className="group-title">Upcoming trips</h3>

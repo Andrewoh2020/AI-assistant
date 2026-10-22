@@ -217,10 +217,8 @@ export interface TripView {
 
 /** Gmail as Settings shows it. Never holds the sign-in token. */
 export interface GmailStatus {
-  /** The app has a Google app set up, so Gmail can be connected at all. */
-  available: boolean;
   connected: boolean;
-  /** Google turned the connection down (expired or removed); connecting again fixes it. */
+  /** The connection stopped working (expired or removed); connecting again fixes it. */
   needsReconnect: boolean;
   email: string | null;
   lastCheckedAt: string | null;
@@ -334,7 +332,7 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     importVault: (input: { csv: string; manager: PasswordManager; indices: number[] }) =>
       call<{ imported: number; replaced: number }>("POST", "/vault/import", input),
     gmail: () => call<GmailStatus>("GET", "/connectors/gmail"),
-    /** Where the browser goes to connect Gmail (Google's sign-in, then back to the app). */
+    /** Where the browser goes to connect Gmail (the hosted connect page, then back to the app). */
     gmailConnectUrl: () => `${baseUrl}/connectors/gmail/start`,
     disconnectGmail: () => call<{ ok: true }>("DELETE", "/connectors/gmail"),
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,

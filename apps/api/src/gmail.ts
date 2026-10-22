@@ -36,7 +36,7 @@ const QUERY =
 
 const STATE_MINUTES = 15;
 
-/** The `state` sent through Google's sign-in, so the answer can only land on the account that asked. */
+/** The `state` sent through the connect page, so the answer can only land on the account that asked. */
 export function signState(userId: string, secret: string, now = Date.now()): string {
   const body = `${userId}.${randomBytes(9).toString("base64url")}.${now + STATE_MINUTES * 60000}`;
   const mac = createHmac("sha256", secret).update(`gmail-state:${body}`).digest("base64url");
@@ -54,14 +54,20 @@ export function checkState(state: string, userId: string, secret: string, now = 
   );
 }
 
+/**
+ * After the connect page sends the person back: finds the Gmail account they connected (being
+ * sent back alone doesn't prove it) and keeps its id in the vault.
+ */
 export async function connectGmail(
   deps: GmailDeps,
   userId: string,
-  code: string,
-  redirectUri: string,
+  travilaUserId: string,
 ): Promise<void> {
-  const { refreshToken, email, scopes } = await deps.google.exchangeCode(code, redirectUri);
-  await saveAccountToken(deps.sql, deps.vaultKey, userId, "gmail", refreshToken);
+  const account = await deps.google.connectedAccount(travilaUserId);
+  if (!account) throw new GoogleAuthError("No working Gmail account was connected");
+  const email = account.email || null;
+  const scopes = null;
+  await saveAccountToken(deps.sql, deps.vaultKey, userId, "gmail", account.accountId);
   await withUser(deps.sql, userId, async (tx) => {
     // A different Gmail address starts over: its mail hasn't been read yet.
     const [old] = await tx<{ account_email: string | null }[]>`
@@ -78,15 +84,19 @@ export async function connectGmail(
   });
 }
 
-/** Forgets the connection and tells Google to cancel the token. Trips already found stay. */
-export async function disconnectGmail(deps: GmailDeps, userId: string): Promise<void> {
+/** Forgets the connection and removes it at Travila too. Trips already found stay. */
+export async function disconnectGmail(
+  deps: GmailDeps,
+  userId: string,
+  travilaUserId: string,
+): Promise<void> {
   const token = await accountToken(deps.sql, deps.vaultKey, userId, "gmail");
   await deleteAccountToken(deps.sql, userId, "gmail");
   await withUser(deps.sql, userId, async (tx) => {
     await tx`DELETE FROM connector_accounts WHERE provider = 'gmail'`;
     await tx`DELETE FROM gmail_scanned`;
   });
-  if (token) await deps.google.revoke(token);
+  if (token) await deps.google.disconnect(travilaUserId, token);
 }
 
 interface ConnectorRow {
@@ -103,7 +113,6 @@ export async function gmailStatus(deps: GmailDeps, userId: string): Promise<Gmai
     (tx) => tx<ConnectorRow[]>`SELECT * FROM connector_accounts WHERE provider = 'gmail'`,
   );
   return {
-    available: deps.google.available,
     connected: row?.status === "connected",
     needsReconnect: row?.status === "error",
     email: row?.account_email ?? null,
@@ -155,18 +164,20 @@ export async function syncGmail(
   let failure: string | null = null;
   let incomplete = false;
   try {
-    const refresh = await accountToken(deps.sql, deps.vaultKey, userId, "gmail");
-    if (!refresh) throw new GoogleAuthError("no saved token");
-    const access = await deps.google.accessToken(refresh);
+    const accountId = await accountToken(deps.sql, deps.vaultKey, userId, "gmail");
+    if (!accountId) throw new GoogleAuthError("no saved account");
+    const [me] = await withUser(
+      deps.sql,
+      userId,
+      (tx) => tx<{ travila_user_id: string }[]>`
+        SELECT travila_user_id FROM users WHERE id = ${userId}`,
+    );
+    const box = await deps.google.open(me!.travila_user_id, accountId);
     const since = first
       ? `newer_than:${FIRST_LOOK_BACK}`
       : // A day of overlap, so mail that arrived during the last check isn't missed.
         `after:${Math.floor(lease.last_synced_at!.getTime() / 1000) - 86400}`;
-    const ids = await deps.google.listMessages(
-      access,
-      `${QUERY} ${since}`,
-      first ? FIRST_MAX : LATER_MAX,
-    );
+    const ids = await box.listMessages(`${QUERY} ${since}`, first ? FIRST_MAX : LATER_MAX);
     const seen = new Set(
       (
         await withUser(
@@ -189,7 +200,7 @@ export async function syncGmail(
       }
       const batch = await Promise.all(
         todo.slice(i, i + 4).map(async (id) => {
-          const mail = await deps.google.getMessage(access, id);
+          const mail = await box.getMessage(id);
           try {
             return { id: mail.id, found: await deps.reader.read(mail) };
           } catch (err) {

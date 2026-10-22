@@ -86,7 +86,6 @@ export function AppShell({ chatId }: { chatId: string }) {
     if (
       result === "connected" ||
       result === "cancelled" ||
-      result === "denied" ||
       result === "failed" ||
       result === "unavailable"
     ) {
