@@ -250,14 +250,16 @@ export async function planFlights(
       const arrival = arrivalFor(b);
       if (!plan) {
         const arrivalDue = arrival ? arrivalOpens(b) : null;
-        await tx`
+        const [made] = await tx`
           INSERT INTO flight_plans (trip_item_id, user_id, depart_at, arrive_at, checkin_due_at,
                                     arrival_country, arrival_status, arrival_due_at, next_due_at)
           VALUES (${item.id}, ${userId}, ${departAt}, ${arriveAt},
                   ${new Date(departAt.getTime() - CHECKIN_OPENS_H * HOUR)},
                   ${arrival}, ${arrival ? "scheduled" : "not_needed"}, ${arrivalDue}, ${now})
-          ON CONFLICT DO NOTHING`;
-        await postCard(tx, userId, item.id, b);
+          ON CONFLICT DO NOTHING
+          RETURNING trip_item_id`;
+        // Two flights saved at once each plan every leg; only the one that made the plan posts its card.
+        if (made) await postCard(tx, userId, item.id, b);
         continue;
       }
       const old = plan.depart_at ? new Date(plan.depart_at) : null;
@@ -513,6 +515,9 @@ function missingWords(c: Ctx): string[] {
   return out;
 }
 
+/** "Qatar Airways'" and "IndiGo's". */
+const possessive = (name: string) => (name.endsWith("s") ? `${name}'` : `${name}'s`);
+
 const list = (xs: string[]) =>
   xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
 
@@ -536,9 +541,13 @@ async function stepCheckin(c: Ctx, depart: Date): Promise<Date | null> {
   if (plan.checkin_status === "running") return followCheckin(c, depart);
 
   if (plan.checkin_status === "scheduled" && now < due) {
-    // One reminder the day before check-in opens, only if something is missing.
-    const remindAt = new Date(due.getTime() - 24 * HOUR);
-    if (missing.length && now >= remindAt) {
+    // One reminder the day before check-in opens, only if something is missing. Not within 12 hours
+    // of the trip card asking (a flight booked less than a day ahead would get it straight away).
+    const remindAt = new Date(
+      Math.max(due.getTime() - 24 * HOUR, new Date(plan.created_at).getTime() + 12 * HOUR),
+    );
+    const remind = missing.length > 0 && remindAt < due;
+    if (remind && now >= remindAt) {
       await tell(
         c,
         "prep_reminder",
@@ -546,7 +555,7 @@ async function stepCheckin(c: Ctx, depart: Date): Promise<Date | null> {
         true,
       );
     }
-    return missing.length && now < remindAt ? remindAt : due;
+    return remind && now < remindAt ? remindAt : due;
   }
 
   if (missing.length) {
@@ -589,7 +598,9 @@ function operatorOf(c: Ctx): string | null {
 
 function checkinSite(c: Ctx): string {
   const code = operatorOf(c);
-  return code && AIRLINES[code] ? AIRLINES[code].domain : `${airlineName(c.b, code)}'s website`;
+  return code && AIRLINES[code]
+    ? AIRLINES[code].domain
+    : `${possessive(airlineName(c.b, code))} website`;
 }
 
 async function startCheckin(c: Ctx): Promise<Date> {
@@ -869,7 +880,7 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       await tell(
         c,
         "airport",
-        `Please check in at the ${airline} desk for ${flightName(b)}: ${airline}'s site won't check you in online. ${
+        `Please check in at the ${airline} desk for ${flightName(b)}: ${possessive(airline)} site won't check you in online. ${
           why
             ? `It said: "${why}"`
             : `It didn't say why. The usual reasons are that they want to check your passport or visa in person (common on international trips, especially to the US), or that a leg is flown by a partner airline. Staff at the desk sort out either one in a few minutes.`
