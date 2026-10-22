@@ -49,7 +49,7 @@ export interface CreateThreadInput {
  * Providers tried first for the DeepSeek model (a preference: Travila still falls back to others).
  * Unpinned, replies took 3-18 s; with these first, about 1-3 s (measured 2026-10-22).
  */
-const PREFERRED_PROVIDERS = ["together", "baseten", "fireworks"];
+const PREFERRED_PROVIDERS = ["together", "baseten", "venice/fp8"];
 
 function generationConfig(input: CreateThreadInput) {
   return {
