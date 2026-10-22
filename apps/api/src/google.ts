@@ -37,8 +37,9 @@ export interface Google {
   disconnect(travilaUserId: string, accountId: string): Promise<void>;
 }
 
-// Travila's connected-apps service. The paths are the ones in Travila's API reference.
-const SERVICE = "/api/integrations.v1.services.gateway.v1.IntegrationsGatewayService";
+// Travila's connected-apps service (checked against api.travila.ai on 2026-10-22; the API
+// reference lists the same calls under longer names).
+const SERVICE = "/api/v1/integrations/pipedream";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
 const APP = "gmail";
 
@@ -87,11 +88,11 @@ export class TravilaGmail implements Google {
   }
 
   async connectUrl(travilaUserId: string, successUrl: string, errorUrl: string) {
-    const r = await this.call<{ connectLinkUrl?: string }>(
-      travilaUserId,
-      "PipedreamCreateConnectToken",
-      { appSlug: APP, successRedirectUrl: successUrl, errorRedirectUrl: errorUrl },
-    );
+    const r = await this.call<{ connectLinkUrl?: string }>(travilaUserId, "create-connect-token", {
+      appSlug: APP,
+      successRedirectUrl: successUrl,
+      errorRedirectUrl: errorUrl,
+    });
     // Travila's docs: check the link goes to Pipedream before sending anyone there.
     const url = new URL(r.connectLinkUrl ?? "");
     if (url.protocol !== "https:" || !/(^|\.)pipedream\.(com|net)$/.test(url.hostname)) {
@@ -101,11 +102,7 @@ export class TravilaGmail implements Google {
   }
 
   private async accounts(travilaUserId: string): Promise<Account[]> {
-    const r = await this.call<{ data?: Account[] }>(
-      travilaUserId,
-      "PipedreamListAccountsForCurrentUser",
-      { app: APP },
-    );
+    const r = await this.call<{ data?: Account[] }>(travilaUserId, "list-accounts", { app: APP });
     return (r.data ?? []).filter((a) => (appOf(a) ?? APP) === APP);
   }
 
@@ -119,11 +116,11 @@ export class TravilaGmail implements Google {
 
   async open(travilaUserId: string, accountId: string): Promise<Mailbox> {
     const get = async <T>(path: string): Promise<T> => {
-      const r = await this.call<{ status?: number; body?: string }>(
-        travilaUserId,
-        "PipedreamProxyForCurrentUser",
-        { accountId, method: "GET", url: `${GMAIL}${path}` },
-      ).catch((err) => {
+      const r = await this.call<{ status?: number; body?: string }>(travilaUserId, "proxy", {
+        accountId,
+        method: "GET",
+        url: `${GMAIL}${path}`,
+      }).catch((err) => {
         // The account was removed (at Pipedream, or it isn't this person's any more).
         if (err instanceof HttpError && (err.status === 404 || err.status === 403)) {
           throw new GoogleAuthError("Gmail connection is gone");
@@ -162,8 +159,6 @@ export class TravilaGmail implements Google {
   }
 
   async disconnect(travilaUserId: string, accountId: string) {
-    await this.call(travilaUserId, "PipedreamDeleteAccountForCurrentUser", { accountId }).catch(
-      () => {},
-    );
+    await this.call(travilaUserId, "delete-account", { accountId }).catch(() => {});
   }
 }
