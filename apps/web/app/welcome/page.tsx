@@ -74,6 +74,14 @@ export default function Welcome() {
   return (
     <main className="center-page">
       <form className="auth-card welcome" onSubmit={(e) => void next(e)}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="brand-icon"
+          src="/brand/ability-icon.png"
+          alt="Ability"
+          width={40}
+          height={40}
+        />
         <ol className="welcome-dots" aria-label={`Step ${index + 1} of ${STEPS.length}`}>
           {STEPS.map((s, i) => (
             <li key={s} className={i <= index ? "on" : undefined} />

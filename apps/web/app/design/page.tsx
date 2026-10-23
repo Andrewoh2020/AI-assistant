@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import {
+  brand,
   colors,
   contrastPairs,
   contrastRatio,
@@ -9,7 +10,7 @@ import {
   type as typeScale,
 } from "@ai-assistant/tokens";
 
-export const metadata = { title: "Design tokens · AI Assistant" };
+export const metadata = { title: "Design tokens · Ability" };
 
 const kebab = (s: string) => s.replace(/([a-z])([A-Z0-9])/g, "$1-$2").toLowerCase();
 
@@ -145,6 +146,40 @@ export default function DesignPage() {
         From Muse&apos;s web and mobile design system, with the blue accent from the architecture
         plan. Every value here comes from <code>packages/tokens</code>; CI fails if any pair below
         drops under its contrast minimum.
+      </p>
+
+      <h2 style={{ fontSize: "var(--type-h2-size)" }}>Brand: {brand.name}</h2>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 32,
+          marginBottom: 16,
+        }}
+      >
+        {/* eslint-disable @next/next/no-img-element */}
+        <img src="/brand/ability-icon.png" alt="Ability app icon" width={64} height={64} />
+        <img src="/brand/ability-wordmark.png" alt="Ability wordmark" width={184} height={48} />
+        <img
+          src="/brand/ability-wordmark-stacked.png"
+          alt="Ability stacked wordmark"
+          width={86}
+          height={104}
+        />
+        {/* eslint-enable @next/next/no-img-element */}
+        <div
+          aria-label="Brand gradient"
+          style={{
+            width: 160,
+            height: 48,
+            borderRadius: "var(--radius-m)",
+            background: `linear-gradient(${brand.gradient.angle}deg, ${brand.gradient.start}, ${brand.gradient.middle}, ${brand.gradient.end})`,
+          }}
+        />
+      </div>
+      <p style={{ color: "var(--ink-2)", marginTop: 0, marginBottom: 24 }}>
+        Originals of all logo variations are in <code>packages/tokens/brand</code>.
       </p>
 
       <h2 style={{ fontSize: "var(--type-h2-size)" }}>Type scale (web)</h2>

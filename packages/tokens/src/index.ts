@@ -73,6 +73,32 @@ export const colors = {
 
 export type ColorName = keyof (typeof colors)["light"];
 
+/**
+ * The Ability brand (Andrew's earlier startup, adopted as this product's name on 2026-10-23).
+ * Logo files are in `packages/tokens/brand/`; the web app serves copies from `apps/web/public/brand/`.
+ * Gradient stops are sampled from the logo artwork (top-left lilac, middle blue, bottom-right sky).
+ */
+export const brand = {
+  name: "Ability",
+  gradient: { start: "#C097FC", middle: "#6B8BF2", end: "#6EDEFA", angle: 135 },
+  /** Wordmark text color. */
+  ink: "#333333",
+  /** App icon corner radius, as a share of the icon's width. */
+  iconRadius: 0.225,
+  logos: {
+    /** Rounded app icon with its soft shadow (480×480), for presentations and store art. */
+    appIconShadow: "ability-app-icon-shadow.png",
+    /** Full-bleed square icon (360×360); iOS and Android round the corners themselves. */
+    iconSquare: "ability-icon-square.png",
+    /** Rounded icon without shadow (256×256), for favicons and small in-app spots. */
+    iconRounded: "ability-icon-rounded.png",
+    /** Icon + "Ability" side by side (569×149), for headers. */
+    wordmark: "ability-wordmark.png",
+    /** Icon above "Ability" (256×312), for sign-in and splash screens. */
+    wordmarkStacked: "ability-wordmark-stacked.png",
+  },
+} as const;
+
 export const radius = {
   web: { s: 10, m: 16, l: 20, pill: 999 },
   mobile: { s: 10, m: 16, l: 20, pill: 999 },

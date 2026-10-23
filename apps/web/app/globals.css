@@ -121,6 +121,21 @@ code {
   place-items: center;
   padding: 20px;
 }
+.auth-stack {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 24px;
+}
+.brand-stacked,
+.brand-icon,
+.brand-wordmark {
+  display: block;
+  height: auto;
+}
+.brand-icon {
+  border-radius: 22.5%;
+}
 .auth-card {
   width: 100%;
   max-width: 400px;
@@ -249,6 +264,13 @@ code {
   padding: 168px 0 20px;
   border-right: 1px solid var(--line);
   background: var(--bg);
+  position: relative;
+}
+.rail-logo {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  translate: -50% 0;
 }
 .rail-tabs {
   display: grid;

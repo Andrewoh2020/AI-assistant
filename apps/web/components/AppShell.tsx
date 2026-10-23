@@ -648,6 +648,14 @@ export function AppShell({ chatId }: { chatId: string }) {
       </a>
 
       <nav className="rail" aria-label="Sections">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="rail-logo"
+          src="/brand/ability-icon.png"
+          alt="Ability"
+          width={32}
+          height={32}
+        />
         <div className="rail-tabs">
           <Link
             href={mainChat ? `/chat/${mainChat.id}` : "/"}
@@ -853,7 +861,7 @@ export function AppShell({ chatId }: { chatId: string }) {
 
         {working && (
           <div className="working-pill" role="status">
-            <strong>Assistant</strong>
+            <strong>Ability</strong>
             <span>{waitingFor ? "is waiting for you" : "is working"}</span>
           </div>
         )}
