@@ -1,4 +1,8 @@
-# AI Assistant (Muse competitor)
+# Ability (Muse competitor)
+
+The product is called **Ability** (Andrew's earlier startup brand, adopted 2026-10-23). Logos and
+brand colors are in `packages/tokens/brand` and the `brand` export of `packages/tokens`. Internal
+package names stay `@ai-assistant/*`.
 
 Andrew's personal AI assistant, built to compete with Meta's Muse. Andrew is not an engineer:
 explain choices in plain words, never hand him install steps or manual commands, and do the
@@ -22,7 +26,9 @@ setup, rebuilds and restarts yourself.
   `pnpm install`, `pnpm build`, `pnpm db:migrate`, then
   `launchctl kickstart -k gui/$(id -u)/com.andrew.ai-assistant`. Check localhost:3000 loads.
 - Keys live only in the app's private `.env`. Never print it or copy keys anywhere else.
-- Current work is on branch `claude/project-thread-i5c4zy` (PR #6, not merged into `main` yet).
+- Current work is on branch `claude/project-thread-8dvjzv`: the Mac branch
+  `claude/project-thread-t0zqo2` (flight check-in + Clerk sign-in) plus the Ability branding.
+  None of it is merged into `main` yet.
   Push work to GitHub so it can be picked up from the cloud again later.
 
 ## Live site
