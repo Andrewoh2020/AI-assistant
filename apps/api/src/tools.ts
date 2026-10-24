@@ -5,9 +5,10 @@ import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
 import { airport } from "./airports.js";
-import { planFlights } from "./flights.js";
+import { flightViews, planFlights, upcomingFlightIds } from "./flights.js";
 import { fileBooking, tripsText, upcomingTrips } from "./gmail.js";
 import { decide, type Resolver } from "./policy.js";
+import { flightLine } from "./share.js";
 import type { SearchBackend } from "./search.js";
 import type { PrepInput } from "./travel.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
@@ -31,6 +32,8 @@ export interface ToolDeps {
   resolve?: Resolver;
   /** Saves travel details as Settings › Travel details does; throws a plain-words error. */
   saveTravel?: (userId: string, details: PrepInput) => Promise<void>;
+  /** Checks the person's Gmail for new bookings, waiting for a check already running. */
+  checkMail?: (userId: string) => Promise<void>;
 }
 
 interface NewSource {
@@ -254,9 +257,22 @@ export async function runTool(
     }
 
     if (call.name === "list_trips") {
+      // A booking email that came a moment ago, or a check still running, is answered from too.
+      await deps.checkMail?.(ctx.userId);
       const trips = await upcomingTrips(ctx.sql, ctx.userId);
+      // Each flight's check-in, so the reply never says "nothing to do" while its card waits.
+      const flights = await flightViews(
+        ctx.sql,
+        ctx.userId,
+        await upcomingFlightIds(ctx.sql, ctx.userId),
+        deps.secret,
+        {},
+      );
       await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
-      return { trips: tripsText(trips) };
+      return {
+        trips: tripsText(trips),
+        ...(flights.size && { trip_cards: [...flights.values()].map(flightLine) }),
+      };
     }
 
     if (call.name === "save_flight" || call.name === "save_hotel") {

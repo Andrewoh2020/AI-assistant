@@ -71,7 +71,8 @@ const NEEDS: Partial<Record<FlightView["prep"]["required"][number], string>> = {
   homeAddress: "home address",
 };
 
-function flightLine(f: FlightView): string {
+/** One flight's trip card in a line: check-in state and what it still needs. */
+export function flightLine(f: FlightView): string {
   const parts = [
     `Trip card: ${f.flightNumber ?? f.airlineName ?? "Flight"} ${f.fromCode ?? ""} → ${f.toCode ?? ""}, ${f.departLocal?.replace("T", " ") ?? "time unknown"}.`,
     `Check-in: ${f.checkin.status}${f.checkin.auto ? "" : " (turned off)"}.`,

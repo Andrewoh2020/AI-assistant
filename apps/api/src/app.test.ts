@@ -793,7 +793,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     ]);
 
     // A changed link doesn't open anything.
-    const forged = path.slice(0, -2) + (path.endsWith("A") ? "B" : "A") + path.slice(-1);
+    const forged = path.slice(0, -2) + (path.at(-2) === "A" ? "B" : "A") + path.slice(-1);
     expect((await app.inject({ method: "GET", url: forged })).statusCode).toBe(404);
   });
 

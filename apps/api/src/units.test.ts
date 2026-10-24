@@ -170,6 +170,15 @@ describe("browse policy", () => {
 
   it("refuses no task, private start pages and odd file ids", async () => {
     expect((await decide("browse", {}, publicResolver)).decision).toBe("deny");
+    // Email goes through the Gmail connection, never a browser signing in to Google.
+    expect(
+      (await decide("browse", { title: "Check Gmail for flight", task: "Find the booking" }))
+        .decision,
+    ).toBe("deny");
+    expect(
+      (await decide("browse", { task: "Find it", url: "https://mail.google.com/mail/u/0" }))
+        .decision,
+    ).toBe("deny");
     expect(
       (await decide("browse", { task: "x", url: "http://169.254.169.254/" }, publicResolver))
         .decision,
@@ -328,8 +337,8 @@ describe("assistant profile version", () => {
       .digest("hex")
       .slice(0, 16);
     expect({ version: PROFILE_VERSION, fingerprint }).toEqual({
-      version: "main-2026-10-25b",
-      fingerprint: "088d73757282306c",
+      version: "main-2026-10-25d",
+      fingerprint: "78df49d00b9e08db",
     });
   });
 });

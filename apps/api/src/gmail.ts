@@ -145,6 +145,32 @@ export async function syncIfDue(deps: GmailDeps, userId: string): Promise<void> 
  * Reads new booking emails and files what it finds. Returns the bookings that are new (not
  * updates). Only one check runs at a time per person (a 2-minute lease).
  */
+/**
+ * Checks Gmail now, for a question about trips: waits for a check already running, then looks for
+ * mail that came since (emails already read aren't read again). Never throws.
+ */
+export async function checkNow(deps: GmailDeps, userId: string, waitMs = 45000): Promise<void> {
+  const started = Date.now();
+  try {
+    for (;;) {
+      const [row] = await withUser(
+        deps.sql,
+        userId,
+        (tx) => tx<{ busy: boolean }[]>`
+          SELECT coalesce(sync_started_at > now() - interval '2 minutes', false) AS busy
+          FROM connector_accounts WHERE provider = 'gmail' AND status = 'connected'`,
+      );
+      if (!row) return;
+      if (!row.busy) break;
+      if (Date.now() - started > waitMs) return;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await syncGmail(deps, userId, Math.max(5000, waitMs - (Date.now() - started)));
+  } catch (err) {
+    console.error("Gmail check failed", (err as Error).message);
+  }
+}
+
 export async function syncGmail(
   deps: GmailDeps,
   userId: string,
@@ -330,12 +356,22 @@ export async function fileBooking(
     await refreshTrip(tx, existing.trip_id);
     return false;
   }
+  // The legs of one booking (a round trip in one email) belong to one trip, however far apart.
+  const [sameBooking] =
+    b.kind === "flight" && b.confirmation
+      ? await tx<{ trip_id: string }[]>`
+          SELECT trip_id FROM trip_items
+          WHERE kind = 'booking' AND details->>'kind' = 'flight'
+            AND confirmation_ref = ${b.confirmation}
+          LIMIT 1`
+      : [];
   const [near] = await tx<{ id: string }[]>`
     SELECT id FROM trips
     WHERE starts_on IS NOT NULL
       AND starts_on - 2 <= ${end}::date AND ends_on + 2 >= ${start}::date
     ORDER BY starts_on LIMIT 1`;
   const tripId =
+    sameBooking?.trip_id ??
     near?.id ??
     (b.kind === "flight" ? await journeyTrip(tx, userId, b, start, end) : undefined) ??
     (

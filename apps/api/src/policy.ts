@@ -63,6 +63,12 @@ export async function decide(
     if (typeof task !== "string" || !task.trim())
       return { decision: "deny", reason: "task is required" };
     if (task.length > 4000) return { decision: "deny", reason: "task is too long" };
+    // Email is read through the Gmail connection; the browser never signs in to someone's Google.
+    if (/gmail|mail\.google\.com/i.test(`${args.title ?? ""} ${task} ${args.url ?? ""}`))
+      return {
+        decision: "deny",
+        reason: "Gmail is read through the Gmail connection, not the browser: call list_trips",
+      };
     if (args.title !== undefined && (typeof args.title !== "string" || args.title.length > 80))
       return { decision: "deny", reason: "title must be a short name" };
     const ids = args.file_ids ?? [];

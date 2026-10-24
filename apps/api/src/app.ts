@@ -24,6 +24,7 @@ import {
   disconnectGmail,
   gmailStatus,
   signState,
+  checkNow,
   syncGmail,
   syncIfDue,
   type GmailDeps,
@@ -166,6 +167,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       for (const id of await upcomingFlightIds(sql, userId)) {
         await afterPrep(flightDeps, userId, id, {});
       }
+    },
+    // A question about trips checks Gmail first, and plans what it finds so the answer knows each
+    // flight's check-in; the trip cards follow.
+    checkMail: async (userId) => {
+      await checkNow(gmailDeps, userId);
+      await planFlights(flightDeps, userId);
+      later(tickUser(flightDeps, userId));
     },
   };
   const gmailDeps: GmailDeps = {
