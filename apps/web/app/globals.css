@@ -1681,6 +1681,10 @@ dialog.confirm p {
 .field-inline::placeholder {
   color: var(--ink-2);
 }
+.field-required {
+  margin-left: 2px;
+  color: var(--danger);
+}
 .field-status {
   margin: -6px 16px 14px;
   color: var(--ink-2);

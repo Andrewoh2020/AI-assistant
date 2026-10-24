@@ -88,17 +88,29 @@ export function TravelPage() {
         Trip cards ask for these once, then check you in with them. Change anything by clicking it.
       </p>
       <div className="group">
-        <TextRow label="First name" value={p.firstName} onSave={(v) => save({ firstName: v })} />
+        <TextRow
+          label="First name"
+          required
+          value={p.firstName}
+          onSave={(v) => save({ firstName: v })}
+        />
         <TextRow label="Middle name" value={p.middleName} onSave={(v) => save({ middleName: v })} />
-        <TextRow label="Last name" value={p.lastName} onSave={(v) => save({ lastName: v })} />
+        <TextRow
+          label="Last name"
+          required
+          value={p.lastName}
+          onSave={(v) => save({ lastName: v })}
+        />
         <TextRow
           label="Date of birth"
+          required
           type="date"
           value={p.dateOfBirth}
           onSave={(v) => save({ dateOfBirth: v })}
         />
         <SelectRow
           label="Gender (as on your ID)"
+          required
           value={p.gender}
           options={[
             ["female", "Female"],
@@ -109,6 +121,7 @@ export function TravelPage() {
         />
         <SelectRow
           label="Nationality"
+          required
           value={p.nationality}
           options={countries().map((c) => [c.code, c.name])}
           onSave={(v) => save({ nationality: v })}
@@ -118,11 +131,13 @@ export function TravelPage() {
       <div className="group">
         <TextRow
           label="Passport number"
+          required
           value={docs?.passportNumber ?? null}
           onSave={(v) => save({ passportNumber: v })}
         />
         <TextRow
           label="Passport expiry date"
+          required
           type="date"
           value={p.passportExpiry}
           onSave={(v) => save({ passportExpiry: v })}
@@ -239,11 +254,13 @@ function TextRow({
   label,
   value,
   type = "text",
+  required,
   onSave,
 }: {
   label: string;
   value: string | null;
   type?: "text" | "date";
+  required?: boolean;
   onSave: (value: string) => Promise<boolean>;
 }) {
   const [text, setText] = useState(value ?? "");
@@ -251,10 +268,11 @@ function TextRow({
   useEffect(() => setText(value ?? ""), [value]);
   return (
     <label className="row row-static row-detail row-field">
-      <span className="row-sub">{label}</span>
+      <RowLabel label={label} required={required} />
       <input
         className="field-inline"
         type={type}
+        aria-required={required}
         value={text}
         placeholder="Not added"
         onChange={(e) => setText(e.target.value)}
@@ -281,18 +299,21 @@ function SelectRow({
   label,
   value,
   options,
+  required,
   onSave,
 }: {
   label: string;
   value: string | null;
   options: [string, string][];
+  required?: boolean;
   onSave: (value: string) => Promise<boolean>;
 }) {
   return (
     <label className="row row-static row-detail row-field">
-      <span className="row-sub">{label}</span>
+      <RowLabel label={label} required={required} />
       <select
         className="field-inline"
+        aria-required={required}
         value={value ?? ""}
         onChange={(e) => void onSave(e.target.value)}
       >
@@ -304,6 +325,20 @@ function SelectRow({
         ))}
       </select>
     </label>
+  );
+}
+
+/** A field's name; a red asterisk marks the ones check-in can't go ahead without. */
+function RowLabel({ label, required }: { label: string; required?: boolean }) {
+  return (
+    <span className="row-sub">
+      {label}
+      {required && (
+        <span className="field-required" aria-hidden="true">
+          *
+        </span>
+      )}
+    </span>
   );
 }
 
