@@ -318,7 +318,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     );
     if (!identity) return reply.code(401).send({ error: "Please sign in." });
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const invite = req.cookies?.[INVITE_COOKIE];
+    // From an invite link (remembered in a cookie) or typed in after "invite-only".
+    const typed = typeof b.invite === "string" ? b.invite.trim() : "";
+    const invite = typed || req.cookies?.[INVITE_COOKIE];
     const allowNew =
       config.openSignup || (!!config.signupCode && !!invite && sameText(invite, config.signupCode));
     const timezone = isTimezone(b.timezone) ? b.timezone : "UTC";
@@ -338,7 +340,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     } catch (err) {
       if ((err as { code?: string }).code === "42501") {
         return reply.code(403).send({
-          error: "This beta is invite-only for now. Ask for an invite link to join.",
+          error: "This beta is invite-only for now. Enter the invite code you were given.",
         });
       }
       throw err;
