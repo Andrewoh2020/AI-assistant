@@ -160,6 +160,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     defer: deps.defer,
     resolve: deps.resolve,
     browserCheckGapMs: deps.browserCheckGapMs,
+    // Details typed in the chat save exactly as in Settings › Travel details.
+    saveTravel: async (userId, details) => {
+      await editProfile(sql, vaultKey, userId, details, today());
+      for (const id of await upcomingFlightIds(sql, userId)) {
+        await afterPrep(flightDeps, userId, id, {});
+      }
+    },
   };
   const gmailDeps: GmailDeps = {
     sql,

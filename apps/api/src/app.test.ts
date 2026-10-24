@@ -817,6 +817,82 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(error).toMatch(/^Not saved: .*tell the user it wasn't saved/);
   });
 
+  it("saves travel details typed in the chat, as Settings would", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    const none = {
+      first_name: null,
+      middle_name: null,
+      last_name: null,
+      date_of_birth: null,
+      gender: null,
+      nationality: null,
+      passport_number: null,
+      passport_expiry: null,
+      passport_country: null,
+      known_traveler_number: null,
+      home_address: null,
+    };
+    travila.scripts.push([
+      {
+        tools: [
+          {
+            name: "save_travel_details",
+            args: {
+              ...none,
+              first_name: "Ann",
+              last_name: "Lee",
+              passport_number: "x 1234567",
+              passport_expiry: "2031-04-30",
+              nationality: "sg",
+            },
+          },
+        ],
+      },
+      { answer: "Saved your name and passport." },
+    ]);
+    const sent = await ask(a, chat, "Ann Lee, passport X1234567, expires 30 Apr 2031, Singaporean");
+    expect((await pollUntilDone(a, sent.json().run.id)).status).toBe("completed");
+    const result = travila.submitted.at(-1)!.results[0]!.resultJson as { saved: string[] };
+    expect(result.saved).toEqual([
+      "first name",
+      "last name",
+      "nationality",
+      "passport number",
+      "passport expiry date",
+    ]);
+    const profile = (
+      await app.inject({ method: "GET", url: "/travel-profile", headers: { cookie: a } })
+    ).json().profile;
+    expect(profile).toMatchObject({
+      firstName: "Ann",
+      lastName: "Lee",
+      nationality: "SG",
+      passportExpiry: "2031-04-30",
+    });
+    const docs = (
+      await app.inject({
+        method: "POST",
+        url: "/travel-profile/reveal",
+        headers: { cookie: a },
+        payload: {},
+      })
+    ).json().documents;
+    expect(docs.passportNumber).toBe("X1234567");
+
+    // A detail that doesn't check out comes back as a plain reason.
+    travila.scripts.push([
+      {
+        tools: [{ name: "save_travel_details", args: { ...none, passport_expiry: "2001-01-01" } }],
+      },
+      { answer: "That expiry date has passed." },
+    ]);
+    const bad = await ask(a, chat, "My passport expires 1 Jan 2001");
+    await pollUntilDone(a, bad.json().run.id);
+    const error = (travila.submitted.at(-1)!.results[0]!.resultJson as { error: string }).error;
+    expect(error).toMatch(/^Not saved: /);
+  });
+
   it("shows an attached screenshot to the model", async () => {
     const a = await signUp();
     const chat = await mainChatId(a);
