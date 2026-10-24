@@ -17,7 +17,7 @@ import { cleanFileName } from "./files.js";
 import { extractText } from "./extract.js";
 import { jobTitle, plainAsk } from "./browser.js";
 import { TOOLS } from "@ai-assistant/agent";
-import { hideNumbers, readShareToken, shareToken } from "./share.js";
+import { readShareToken, shareToken } from "./share.js";
 
 describe("SSRF block", () => {
   const publicResolver = async () => ["93.184.216.34"];
@@ -116,12 +116,6 @@ describe("sessions and passwords", () => {
 });
 
 describe("share links", () => {
-  it("hide passport-like numbers but keep flights, dates and times", () => {
-    expect(hideNumbers("Passport 549957786, ref 9G39Y8, QR 4791 at 04:25 on 2026-10-23")).toBe(
-      "Passport •••, ref •••, QR 4791 at 04:25 on 2026-10-23",
-    );
-  });
-
   it("only open the chat they were made for, until they expire", () => {
     const chatId = "0b6f2c1e-6a51-4c5e-9d8e-0f4a2b1c3d4e";
     const userId = "7d1e9a52-3c4b-4e8f-9a1b-2c3d4e5f6a7b";

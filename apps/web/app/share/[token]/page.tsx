@@ -7,8 +7,8 @@ import { Answer } from "@/components/Answer";
 import { api } from "@/lib/client";
 
 /**
- * A chat someone shared with a read-only link. Numbers that look like passport, ID or card
- * numbers are hidden by the server; files, browser views and trip card details aren't shared.
+ * A chat someone shared with a read-only link, shown as they see it. Files, browser views and
+ * trip cards appear as one line each.
  */
 export default function SharedChatPage() {
   const { token } = useParams<{ token: string }>();
@@ -48,8 +48,8 @@ export default function SharedChatPage() {
         />
         <h1>{chat.title}</h1>
         <p className="muted">
-          A read-only copy shared with you. Passport, ID and booking numbers are hidden. The link
-          works until {new Date(chat.expiresAt).toLocaleDateString()}.
+          A read-only copy shared with you. The link works until{" "}
+          {new Date(chat.expiresAt).toLocaleDateString()}.
         </p>
       </header>
       {chat.messages.map((m) => (

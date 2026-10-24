@@ -735,7 +735,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(denied.error).toBe("No file with that file_id.");
   });
 
-  it("shares a chat read-only, with ID-style numbers hidden", async () => {
+  it("shares a chat read-only, showing it as the owner sees it", async () => {
     const a = await signUp();
     const chat = await mainChatId(a);
     travila.scripts.push([{ answer: "Please use the trip card, not the chat." }]);
@@ -759,14 +759,13 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const path = made.json().path as string;
     expect(path).toMatch(/^\/share\/[\w-]+\.[\w-]+$/);
 
-    // Anyone with it can read, signed in or not; the passport number isn't in it.
+    // Anyone with it can read, signed in or not, numbers and all.
     const res = await app.inject({ method: "GET", url: path });
     expect(res.statusCode).toBe(200);
-    expect(res.body).not.toContain("549957786");
     const shared = res.json().chat;
     expect(shared.title).toBe("Main chat");
     expect(shared.messages.map((m: { text: string }) => m.text)).toEqual([
-      "Ann Lee, passport •••, flight QR 4791 on 23 Oct",
+      "Ann Lee, passport 549957786, flight QR 4791 on 23 Oct",
       "Please use the trip card, not the chat.",
     ]);
 

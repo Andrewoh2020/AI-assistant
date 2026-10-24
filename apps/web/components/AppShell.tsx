@@ -1116,8 +1116,7 @@ function ShareDialog({ chat, onClose }: { chat: ChatSummary; onClose: () => void
       ) : (
         <>
           Anyone with the link can read this chat for 30 days, including what you send after
-          sharing. Passport, ID and booking numbers are hidden, and your files and saved details
-          aren&apos;t shared.
+          sharing. Your files and saved details aren&apos;t shared.
         </>
       )}
       {error && (
