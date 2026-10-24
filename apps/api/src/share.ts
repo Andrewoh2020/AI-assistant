@@ -100,6 +100,7 @@ export function sharedChat(title: string, messages: MessageView[], expiresAt: Da
         files: [],
         browsers: [],
         flight: null,
+        card: null,
         clientMessageId: null,
         shared: {
           files: m.files.map((f) => f.name),

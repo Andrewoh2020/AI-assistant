@@ -29,6 +29,7 @@ import { usePref } from "@/lib/prefs";
 import { Answer } from "./Answer";
 import { BrowserCard, BrowserPanel } from "./BrowserCard";
 import { FileChip, FileList, PaperclipIcon } from "./Files";
+import { GmailCard, TravelCard } from "./ChatCards";
 import { FlightCard } from "./FlightCard";
 import { Menu, MenuItem } from "./Menu";
 import { Settings, VaultIcon, type GmailResult } from "./Settings";
@@ -916,6 +917,8 @@ export function AppShell({ chatId }: { chatId: string }) {
                 </article>
                 {/* On the day the card is pinned at the top instead. */}
                 {m.flight && m.flight.id !== todayFlight?.id && flightCard(m.flight)}
+                {m.card === "travel" && <TravelCard />}
+                {m.card === "gmail" && <GmailCard chatId={chatId} />}
                 {ended && browserCards(ended.browsers)}
                 {ended && (
                   <p

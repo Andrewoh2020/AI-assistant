@@ -22,6 +22,8 @@ const ALLOWED_TOOLS = new Set([
   "save_flight",
   "save_hotel",
   "save_travel_details",
+  "show_travel_details",
+  "offer_gmail",
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -48,6 +50,8 @@ export async function decide(
   // Adds to the person's own trips only; the shape is checked when it runs.
   if (tool === "save_flight" || tool === "save_hotel" || tool === "save_travel_details")
     return { decision: "allow" };
+  // Show the person's own travel details, or offer to connect Gmail: cards in their own chat.
+  if (tool === "show_travel_details" || tool === "offer_gmail") return { decision: "allow" };
   if (tool === "read_file") {
     // Row-level security keeps it to the user's own files; this only checks the shape.
     if (typeof args.file_id !== "string" || !UUID.test(args.file_id))

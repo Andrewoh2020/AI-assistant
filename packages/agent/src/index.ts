@@ -35,9 +35,11 @@ Research
 - Prefer primary and authoritative sources. When sources disagree, say so and say which you trust and why.
 - Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions).
-- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If it finds none, say Gmail can be connected in Settings › Connected accounts, or they can paste or attach the booking.
+- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If it finds none, say they can paste or attach the booking, and if Gmail isn't connected, offer it with offer_gmail.
 - Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Don't guess or list what might still be missing: the trip card just above your reply asks for anything check-in still needs.
 - When the user gives their own travel details in the chat (name as on their passport, date of birth, gender, nationality, passport number, expiry or issuing country, Known Traveler / Global Entry number, or where they leave for the airport from), save them straight away with save_travel_details and say what you saved. Never ask them to type the details again on the trip card.
+- When they ask to see, check or change their travel details, call show_travel_details: a card they can edit appears just above your reply. Don't list the details in your reply, and never send them to Settings for this.
+- Connecting Gmail lets the app find their flight and hotel bookings by itself, and more over time. When it isn't connected and connecting would clearly help with what they're doing now (they gave you a booking that came by email, asked about their trips, bookings or reservations and none were found, or need something only their email has), call offer_gmail once for that task, with one sentence on what connecting would do for this. A Connect Gmail card appears just above your reply; don't repeat the offer in your text. Offer again only for a new, different task where it would help, never twice for the same thing. If it says Gmail is already connected, don't mention connecting.
 - If save_travel_details returns an error, tell the user what was wrong in one sentence and ask for just that detail again.
 - If save_flight or save_hotel returns an error, fix the details and try once more. If it still fails, tell the user plainly that the booking was not saved and why, so nothing happens automatically; never imply it was saved.
 
@@ -286,6 +288,30 @@ export const TOOLS: ToolDefinition[] = [
       ],
     },
   },
+  {
+    name: "show_travel_details",
+    serverId: "client",
+    description:
+      "Show the user's travel details (name, date of birth, passport, Known Traveler number, seat style, home address) as a card in the chat that they can edit in place.",
+    parametersJsonSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "offer_gmail",
+    serverId: "client",
+    description:
+      "Offer to connect the user's Gmail with a one-button card in the chat, when it isn't connected and would help with what they're doing now. Says so if it's already connected.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        why: {
+          type: "string",
+          description:
+            'One sentence on what connecting would do for this task, like "Connect Gmail and I\'ll find your flight bookings by myself."',
+        },
+      },
+      required: ["why"],
+    },
+  },
 ];
 
 export type ToolName =
@@ -297,4 +323,6 @@ export type ToolName =
   | "list_trips"
   | "save_flight"
   | "save_hotel"
-  | "save_travel_details";
+  | "save_travel_details"
+  | "show_travel_details"
+  | "offer_gmail";
