@@ -4,8 +4,9 @@ import type { FlightView, MessageView, SharedChat, SharedMessage } from "@ai-ass
 /**
  * Read-only links to a chat, made by its owner (for example a beta tester showing us what went
  * wrong). The link itself is the permission: signed, for one chat, and it stops working after
- * SHARE_DAYS. What it shows is the conversation with ID-style numbers hidden; no files, no
- * browser views, nothing from the vault.
+ * SHARE_DAYS. It shows the conversation as the owner sees it, numbers and all (Andrew's call:
+ * people share with someone they trust, often to get help with exactly those details). Files
+ * and browser views are named, not opened.
  */
 
 export const SHARE_DAYS = 30;
@@ -56,27 +57,18 @@ export function readShareToken(
   };
 }
 
-/**
- * Hides passport, ID, card, phone and booking numbers: any run of 6 or more letters and digits
- * with at least 3 digits in it. Flight numbers ("QR 4791"), times and dates stay readable.
- */
-export function hideNumbers(text: string): string {
-  return text.replace(/[A-Za-z0-9]{6,}/g, (run) =>
-    (run.match(/\d/g)?.length ?? 0) >= 3 ? "•••" : run,
-  );
-}
-
 function flightLine(f: FlightView): string {
   const parts = [
     `Trip card: ${f.flightNumber ?? f.airlineName ?? "Flight"} ${f.fromCode ?? ""} → ${f.toCode ?? ""}, ${f.departLocal?.replace("T", " ") ?? "time unknown"}.`,
     `Check-in: ${f.checkin.status}${f.checkin.auto ? "" : " (turned off)"}.`,
   ];
+  if (f.confirmation) parts.push(`Booking ${f.confirmation}.`);
   if (f.prep.required.length) parts.push(`Still needed: ${f.prep.required.join(", ")}.`);
   if (!f.prep.noBannedItems) parts.push(`"No banned items" not ticked.`);
   if (f.checkin.question) parts.push(`Airline asked: ${f.checkin.question}`);
   if (f.checkin.note) parts.push(`Note: ${f.checkin.note}`);
   if (f.arrival) parts.push(`${f.arrival.form}: ${f.arrival.status}.`);
-  return hideNumbers(parts.join(" "));
+  return parts.join(" ");
 }
 
 /** The chat as the link shows it. */
@@ -88,15 +80,15 @@ export function sharedChat(title: string, messages: MessageView[], expiresAt: Da
       .filter((m) => m.role !== "system")
       .map((m): SharedMessage => ({
         ...m,
-        text: hideNumbers(m.text),
-        reasoning: m.reasoning ? hideNumbers(m.reasoning) : null,
+        text: m.text,
+        reasoning: m.reasoning,
         files: [],
         browsers: [],
         flight: null,
         clientMessageId: null,
         shared: {
           files: m.files.map((f) => f.name),
-          browsers: m.browsers.map((b) => hideNumbers(`${b.title}: ${b.label}`)),
+          browsers: m.browsers.map((b) => `${b.title}: ${b.label}`),
           flight: m.flight ? flightLine(m.flight) : null,
         },
       })),

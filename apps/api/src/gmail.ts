@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { withUser, type Sql, type TransactionSql } from "@ai-assistant/db";
 import type { Booking, GmailStatus, TripView } from "@ai-assistant/api-client";
+import { airport } from "./airports.js";
 import { dedupeKey, type BookingReader, type FoundBooking } from "./bookings.js";
 import { GoogleAuthError, type Google } from "./google.js";
 import { accountToken, deleteAccountToken, saveAccountToken, type VaultKey } from "./vault.js";
@@ -336,6 +337,7 @@ export async function fileBooking(
     ORDER BY starts_on LIMIT 1`;
   const tripId =
     near?.id ??
+    (b.kind === "flight" ? await journeyTrip(tx, userId, b, start, end) : undefined) ??
     (
       await tx<{ id: string }[]>`
         INSERT INTO trips (user_id, status, starts_on, ends_on)
@@ -348,6 +350,50 @@ export async function fileBooking(
             ${b.confirmation}, ${key}, ${messageId ? "gmail" : "chat"}, ${messageId})`;
   await refreshTrip(tx, tripId);
   return true;
+}
+
+/**
+ * The trip a flight carries on, when it isn't within two days of one: a flight home a week later
+ * leaves from where the trip's last flight landed (or, saved first, lands where its first flight
+ * left from). Only when that city isn't home, judged by the person's time zone: a flight that
+ * lands at home ends a trip, and the next one from there starts a new one. With no time zone
+ * known, flights further apart stay separate trips.
+ */
+async function journeyTrip(
+  tx: TransactionSql,
+  userId: string,
+  b: Extract<Booking, { kind: "flight" }>,
+  start: string,
+  end: string,
+): Promise<string | undefined> {
+  if (!b.fromCode || !b.toCode) return undefined;
+  const [me] = await tx<{ timezone: string }[]>`SELECT timezone FROM users WHERE id = ${userId}`;
+  const home = me?.timezone;
+  if (!home || home === "UTC") return undefined;
+  const away = (code: string | null) => {
+    const tz = airport(code)?.tz;
+    return !!tz && tz !== home;
+  };
+  // Where the flight meets each trip: its last landing (carrying on) or its first departure (leading in).
+  const candidates = await tx<{ id: string; junction: string }[]>`
+    WITH legs AS (
+      SELECT DISTINCT trip_id,
+             first_value(details->>'fromCode') OVER w AS first_from,
+             last_value(details->>'toCode') OVER w AS last_to
+      FROM trip_items WHERE kind = 'booking' AND details->>'kind' = 'flight'
+      WINDOW w AS (PARTITION BY trip_id ORDER BY details->>'departAt'
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+    ), joins AS (
+      SELECT t.id, t.starts_on, l.last_to AS junction FROM trips t JOIN legs l ON l.trip_id = t.id
+      WHERE l.first_from IS DISTINCT FROM l.last_to AND l.last_to = ${b.fromCode}
+        AND ${start}::date BETWEEN t.ends_on AND t.ends_on + 30
+      UNION ALL
+      SELECT t.id, t.starts_on, l.first_from FROM trips t JOIN legs l ON l.trip_id = t.id
+      WHERE l.first_from IS DISTINCT FROM l.last_to AND l.first_from = ${b.toCode}
+        AND ${end}::date BETWEEN t.starts_on - 30 AND t.starts_on
+    )
+    SELECT id, junction FROM joins ORDER BY starts_on`;
+  return candidates.find((t) => away(t.junction))?.id;
 }
 
 /** Recomputes a trip's dates and destination from its bookings (or removes it when empty). */

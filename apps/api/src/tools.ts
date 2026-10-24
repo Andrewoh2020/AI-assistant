@@ -9,6 +9,7 @@ import { planFlights } from "./flights.js";
 import { fileBooking, tripsText, upcomingTrips } from "./gmail.js";
 import { decide, type Resolver } from "./policy.js";
 import type { SearchBackend } from "./search.js";
+import type { PrepInput } from "./travel.js";
 import type { Travila, TravilaToolCall } from "./travila.js";
 import { detectInjection, fence } from "./untrusted.js";
 
@@ -28,6 +29,8 @@ export interface ToolDeps {
   secret: string;
   /** DNS lookup used by the SSRF check; replaceable in tests. */
   resolve?: Resolver;
+  /** Saves travel details as Settings › Travel details does; throws a plain-words error. */
+  saveTravel?: (userId: string, details: PrepInput) => Promise<void>;
 }
 
 interface NewSource {
@@ -285,6 +288,27 @@ export async function runTool(
       };
     }
 
+    if (call.name === "save_travel_details") {
+      const details = travelDetailsFrom(args);
+      const given = Object.keys(details);
+      if (!given.length || !deps.saveTravel) {
+        await finishToolCall(ctx, toolCallId, { status: "failed", decision: "allow" });
+        return { error: "Nothing to save: no travel details were given." };
+      }
+      try {
+        await deps.saveTravel(ctx.userId, details);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await finishToolCall(ctx, toolCallId, { status: "failed", decision: "allow", reason });
+        return { error: `Not saved: ${reason}` };
+      }
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      return {
+        saved: given.map((k) => TRAVEL_LABELS[k as keyof PrepInput] ?? k),
+        next: "Saved to their travel details: every trip card and check-in uses them from now on.",
+      };
+    }
+
     // memory_search
     const memories = await deps.travila.searchMemories(ctx.travilaUserId, String(args.query), 5);
     await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
@@ -301,6 +325,51 @@ export async function runTool(
         "The tool failed. Try again once, or answer without it and say what you couldn't check.",
     };
   }
+}
+
+const TRAVEL_FIELDS: Record<string, keyof PrepInput> = {
+  first_name: "firstName",
+  middle_name: "middleName",
+  last_name: "lastName",
+  date_of_birth: "dateOfBirth",
+  gender: "gender",
+  nationality: "nationality",
+  passport_number: "passportNumber",
+  passport_expiry: "passportExpiry",
+  passport_country: "passportCountry",
+  known_traveler_number: "knownTravelerNumber",
+  home_address: "homeAddress",
+};
+
+const TRAVEL_LABELS: Partial<Record<keyof PrepInput, string>> = {
+  firstName: "first name",
+  middleName: "middle name",
+  lastName: "last name",
+  dateOfBirth: "date of birth",
+  gender: "gender",
+  nationality: "nationality",
+  passportNumber: "passport number",
+  passportExpiry: "passport expiry date",
+  passportCountry: "passport issuing country",
+  knownTravelerNumber: "Known Traveler number",
+  homeAddress: "home address",
+};
+
+/** The details save_travel_details was given (nulls and blanks left out), as Settings saves them. */
+export function travelDetailsFrom(args: Record<string, unknown>): PrepInput {
+  const out: Record<string, unknown> = {};
+  for (const [arg, field] of Object.entries(TRAVEL_FIELDS)) {
+    const v = args[arg];
+    if (typeof v !== "string" || !v.trim()) continue;
+    const text = v.trim();
+    out[field] =
+      field === "nationality" || field === "passportCountry"
+        ? text.toUpperCase()
+        : field === "gender"
+          ? text.toLowerCase()
+          : text;
+  }
+  return out as PrepInput;
 }
 
 const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
@@ -373,6 +442,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (calls.some((c) => c.name === "list_trips")) return "Checking your trips";
   if (calls.some((c) => c.name === "save_flight" || c.name === "save_hotel"))
     return "Saving your booking";
+  if (calls.some((c) => c.name === "save_travel_details")) return "Saving your travel details";
   return "Working";
 }
 

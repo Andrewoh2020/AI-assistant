@@ -70,6 +70,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   // The message being sent, shown at once while the server accepts it.
   const [pending, setPending] = useState<{ text: string; files: FileView[] } | null>(null);
   const sendingRef = useRef(false);
+  const chatIdRef = useRef(chatId);
+  chatIdRef.current = chatId;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [navOpen, setNavOpen] = useState(false);
   // "Keep chat panel visible": on, the chat list stays beside the chat; off, the rail's chat
@@ -254,6 +256,14 @@ export function AppShell({ chatId }: { chatId: string }) {
           }
           setActiveRun(null);
           void refreshChats();
+          // Messages the reply posted on the way (a trip card) come with the chat, not the run.
+          const forChat = chatId;
+          api
+            .getChat(forChat)
+            .then((data) => {
+              if (chatIdRef.current === forChat) setMessages(data.messages);
+            })
+            .catch(handleAuth);
           return;
         }
       } catch (err) {
@@ -267,7 +277,7 @@ export function AppShell({ chatId }: { chatId: string }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [activeRunId, handleAuth, refreshChats]);
+  }, [activeRunId, chatId, handleAuth, refreshChats]);
 
   // Replies still being worked on in other chats. Polling moves them forward on the server, so a
   // side chat keeps answering while you read Main, and the chat list shows when it's done.
@@ -1106,8 +1116,7 @@ function ShareDialog({ chat, onClose }: { chat: ChatSummary; onClose: () => void
       ) : (
         <>
           Anyone with the link can read this chat for 30 days, including what you send after
-          sharing. Passport, ID and booking numbers are hidden, and your files and saved details
-          aren&apos;t shared.
+          sharing. Your files and saved details aren&apos;t shared.
         </>
       )}
       {error && (

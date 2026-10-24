@@ -36,7 +36,9 @@ Research
 - Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions).
 - Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If it finds none, say Gmail can be connected in Settings › Connected accounts, or they can paste or attach the booking.
-- Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Say plainly that they fill in the trip card just above your reply. Don't ask for passport or other personal details in the chat; the trip card asks for them securely. If they type them in the chat anyway, don't repeat them, and tell them to enter them on the trip card above in the Main chat instead. Never repeat a passport number the user typed.
+- Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Don't guess or list what might still be missing: the trip card just above your reply asks for anything check-in still needs.
+- When the user gives their own travel details in the chat (name as on their passport, date of birth, gender, nationality, passport number, expiry or issuing country, Known Traveler / Global Entry number, or where they leave for the airport from), save them straight away with save_travel_details and say what you saved. Never ask them to type the details again on the trip card.
+- If save_travel_details returns an error, tell the user what was wrong in one sentence and ask for just that detail again.
 - If save_flight or save_hotel returns an error, fix the details and try once more. If it still fails, tell the user plainly that the booking was not saved and why, so nothing happens automatically; never imply it was saved.
 
 Citations
@@ -236,6 +238,54 @@ export const TOOLS: ToolDefinition[] = [
       required: ["hotel_name", "city", "check_in", "check_out"],
     },
   },
+  {
+    name: "save_travel_details",
+    serverId: "client",
+    description:
+      "Save the user's own travel details that they gave in the chat, for flight check-in and arrival cards. They show on the trip card and in Settings › Travel details. Give null for anything they didn't give.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        first_name: { type: ["string", "null"], description: "As on their passport." },
+        middle_name: { type: ["string", "null"], description: "As on their passport." },
+        last_name: { type: ["string", "null"], description: "As on their passport." },
+        date_of_birth: { type: ["string", "null"], description: "YYYY-MM-DD." },
+        gender: { type: ["string", "null"], enum: ["female", "male", "x", null] },
+        nationality: {
+          type: ["string", "null"],
+          description: 'Two-letter country code, like "SG".',
+        },
+        passport_number: { type: ["string", "null"], description: "Exactly as they typed it." },
+        passport_expiry: { type: ["string", "null"], description: "YYYY-MM-DD." },
+        passport_country: {
+          type: ["string", "null"],
+          description: "Two-letter code of the country that issued the passport.",
+        },
+        known_traveler_number: {
+          type: ["string", "null"],
+          description: "TSA PreCheck, Global Entry or similar number.",
+        },
+        home_address: {
+          type: ["string", "null"],
+          description: "Where they leave for the airport from.",
+        },
+      },
+      // Every field is required (null when not given): DeepSeek drops optional arguments.
+      required: [
+        "first_name",
+        "middle_name",
+        "last_name",
+        "date_of_birth",
+        "gender",
+        "nationality",
+        "passport_number",
+        "passport_expiry",
+        "passport_country",
+        "known_traveler_number",
+        "home_address",
+      ],
+    },
+  },
 ];
 
 export type ToolName =
@@ -246,4 +296,5 @@ export type ToolName =
   | "memory_search"
   | "list_trips"
   | "save_flight"
-  | "save_hotel";
+  | "save_hotel"
+  | "save_travel_details";

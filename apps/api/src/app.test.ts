@@ -173,6 +173,21 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       payload: { email, password: "long-enough-pw" },
     });
     expect(good.statusCode).toBe(200);
+
+    // An account made without a time zone gets the browser's at sign-in; a real one stays put
+    // when they sign in while travelling.
+    const zone = async () =>
+      (await sql!<{ timezone: string }[]>`SELECT timezone FROM users WHERE email = ${email}`)[0]!
+        .timezone;
+    expect(await zone()).toBe("UTC");
+    for (const timezone of ["Asia/Singapore", "Asia/Tokyo"]) {
+      await app.inject({
+        method: "POST",
+        url: "/auth/sign-in",
+        payload: { email, password: "long-enough-pw", timezone },
+      });
+    }
+    expect(await zone()).toBe("Asia/Singapore");
   });
 
   describe("Clerk sign-in", () => {
@@ -735,7 +750,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(denied.error).toBe("No file with that file_id.");
   });
 
-  it("shares a chat read-only, with ID-style numbers hidden", async () => {
+  it("shares a chat read-only, showing it as the owner sees it", async () => {
     const a = await signUp();
     const chat = await mainChatId(a);
     travila.scripts.push([{ answer: "Please use the trip card, not the chat." }]);
@@ -759,14 +774,13 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const path = made.json().path as string;
     expect(path).toMatch(/^\/share\/[\w-]+\.[\w-]+$/);
 
-    // Anyone with it can read, signed in or not; the passport number isn't in it.
+    // Anyone with it can read, signed in or not, numbers and all.
     const res = await app.inject({ method: "GET", url: path });
     expect(res.statusCode).toBe(200);
-    expect(res.body).not.toContain("549957786");
     const shared = res.json().chat;
     expect(shared.title).toBe("Main chat");
     expect(shared.messages.map((m: { text: string }) => m.text)).toEqual([
-      "Ann Lee, passport •••, flight QR 4791 on 23 Oct",
+      "Ann Lee, passport 549957786, flight QR 4791 on 23 Oct",
       "Please use the trip card, not the chat.",
     ]);
 
@@ -816,6 +830,82 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     await pollUntilDone(a, bad.json().run.id);
     const error = (travila.submitted.at(-1)!.results[0]!.resultJson as { error: string }).error;
     expect(error).toMatch(/^Not saved: .*tell the user it wasn't saved/);
+  });
+
+  it("saves travel details typed in the chat, as Settings would", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    const none = {
+      first_name: null,
+      middle_name: null,
+      last_name: null,
+      date_of_birth: null,
+      gender: null,
+      nationality: null,
+      passport_number: null,
+      passport_expiry: null,
+      passport_country: null,
+      known_traveler_number: null,
+      home_address: null,
+    };
+    travila.scripts.push([
+      {
+        tools: [
+          {
+            name: "save_travel_details",
+            args: {
+              ...none,
+              first_name: "Ann",
+              last_name: "Lee",
+              passport_number: "x 1234567",
+              passport_expiry: "2031-04-30",
+              nationality: "sg",
+            },
+          },
+        ],
+      },
+      { answer: "Saved your name and passport." },
+    ]);
+    const sent = await ask(a, chat, "Ann Lee, passport X1234567, expires 30 Apr 2031, Singaporean");
+    expect((await pollUntilDone(a, sent.json().run.id)).status).toBe("completed");
+    const result = travila.submitted.at(-1)!.results[0]!.resultJson as { saved: string[] };
+    expect(result.saved).toEqual([
+      "first name",
+      "last name",
+      "nationality",
+      "passport number",
+      "passport expiry date",
+    ]);
+    const profile = (
+      await app.inject({ method: "GET", url: "/travel-profile", headers: { cookie: a } })
+    ).json().profile;
+    expect(profile).toMatchObject({
+      firstName: "Ann",
+      lastName: "Lee",
+      nationality: "SG",
+      passportExpiry: "2031-04-30",
+    });
+    const docs = (
+      await app.inject({
+        method: "POST",
+        url: "/travel-profile/reveal",
+        headers: { cookie: a },
+        payload: {},
+      })
+    ).json().documents;
+    expect(docs.passportNumber).toBe("X1234567");
+
+    // A detail that doesn't check out comes back as a plain reason.
+    travila.scripts.push([
+      {
+        tools: [{ name: "save_travel_details", args: { ...none, passport_expiry: "2001-01-01" } }],
+      },
+      { answer: "That expiry date has passed." },
+    ]);
+    const bad = await ask(a, chat, "My passport expires 1 Jan 2001");
+    await pollUntilDone(a, bad.json().run.id);
+    const error = (travila.submitted.at(-1)!.results[0]!.resultJson as { error: string }).error;
+    expect(error).toMatch(/^Not saved: /);
   });
 
   it("shows an attached screenshot to the model", async () => {

@@ -10,3 +10,5 @@ coverage/
 .DS_Store
 .vercel
 next-env.d.ts
+
+.claude/settings.local.json
