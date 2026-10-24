@@ -194,7 +194,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const clerk = (
       clerkId: string,
       email: string | null,
-      opts: { invite?: string; secret?: string; exp?: number } = {},
+      opts: { invite?: string; typed?: string; secret?: string; exp?: number } = {},
     ) =>
       app.inject({
         method: "POST",
@@ -206,7 +206,7 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
           ),
           ...(opts.invite ? { cookie: `aia_invite=${opts.invite}` } : {}),
         },
-        payload: { timezone: "Asia/Singapore" },
+        payload: { timezone: "Asia/Singapore", ...(opts.typed ? { invite: opts.typed } : {}) },
       });
     const session = (res: Awaited<ReturnType<typeof clerk>>) =>
       `aia_session=${res.cookies.find((c) => c.name === "aia_session")!.value}`;
@@ -227,6 +227,14 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       expect(again.json()).toEqual({ ok: true, needsOnboarding: true });
       const me = await app.inject({ method: "GET", url: "/me", headers: { cookie: session(ok) } });
       expect(me.json()).toMatchObject({ displayName: "Ada Lovelace", email, onboarded: false });
+    });
+
+    it('lets a new person in with an invite code typed after "invite-only"', async () => {
+      const id = `typed_${Date.now()}`;
+      const email = `${id}@example.com`;
+      expect((await clerk(id, email, { typed: "wrong" })).statusCode).toBe(403);
+      const ok = await clerk(id, email, { typed: " invite-123 " });
+      expect(ok.json()).toEqual({ ok: true, needsOnboarding: true });
     });
 
     it("refuses a forged or expired identity", async () => {

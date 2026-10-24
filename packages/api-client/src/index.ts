@@ -470,7 +470,8 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     signIn: (input: { email: string; password: string; timezone: string }) =>
       call<{ ok: true }>("POST", "/auth/sign-in", input),
     /** Turns a Clerk sign-in (Google or an emailed code) into a session with this app. */
-    clerkSignIn: (input: { timezone: string }) =>
+    /** invite: a code typed on the sign-in page, for people who didn't come in by an invite link. */
+    clerkSignIn: (input: { timezone: string; invite?: string }) =>
       call<{ ok: true; needsOnboarding: boolean }>("POST", "/auth/clerk", input),
     finishOnboarding: (input: { displayName?: string; dateOfBirth?: string }) =>
       call<{ ok: true }>("POST", "/onboarding", input),
