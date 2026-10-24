@@ -268,9 +268,18 @@ export async function fileBooking(
   // Bookings saved at once (parallel tool calls) are filed one at a time, so the same booking isn't
   // inserted twice and the legs of one journey land in one trip instead of a trip each.
   await tx`SELECT pg_advisory_xact_lock(hashtext(${userId + ":trips"}))`;
-  const [existing] = await tx<
-    { id: string; trip_id: string; details: Record<string, unknown> | null }[]
-  >`SELECT id, trip_id, details FROM trip_items WHERE dedupe_key = ${key}`;
+  type Existing = { id: string; trip_id: string; details: Partial<Booking> | null };
+  let [existing] = await tx<Existing[]>`
+    SELECT id, trip_id, details FROM trip_items WHERE dedupe_key = ${key}`;
+  if (!existing && b.kind === "flight" && b.flightNumber) {
+    // A new departure time changes the key: find the flight by any of its numbers that day.
+    [existing] = await tx<Existing[]>`
+      SELECT id, trip_id, details FROM trip_items
+      WHERE kind = 'booking' AND details->>'kind' = 'flight' AND item_date = ${startOf(b)}
+        AND (details->>'flightNumber' = ${b.flightNumber}
+             OR jsonb_exists(coalesce(details->'codeshares', '[]'), ${b.flightNumber}))
+      LIMIT 1`;
+  }
   if (status === "cancelled") {
     if (existing) {
       await tx`DELETE FROM trip_items WHERE id = ${existing.id}`;
@@ -281,16 +290,39 @@ export async function fileBooking(
   const start = startOf(b)!;
   const end = endOf(b) ?? start;
   if (existing) {
-    // Saved again from chat (the model sometimes saves a flight twice, once with fewer details):
-    // keep what was already known, like the booking reference, instead of blanking it.
-    const merged = messageId
-      ? details
-      : {
-          ...existing.details,
-          ...Object.fromEntries(Object.entries(details).filter(([, v]) => v != null)),
-        };
+    // Saved again (a change email, the model saving a flight twice with fewer details, or the
+    // same flight under a codeshare number): keep what was already known, like the booking
+    // reference, instead of blanking it.
+    const old = (existing.details ?? {}) as Partial<Booking>;
+    let merged = {
+      ...old,
+      ...Object.fromEntries(Object.entries(details).filter(([, v]) => v != null)),
+    } as Partial<Booking>;
+    if (
+      b.kind === "flight" &&
+      old.kind === "flight" &&
+      old.flightNumber &&
+      b.flightNumber !== old.flightNumber
+    ) {
+      // Another number for the same flight, or none: keep the one it was first saved under, with
+      // its airline and booking reference, and remember the other number.
+      merged = {
+        ...merged,
+        flightNumber: old.flightNumber,
+        airline: old.airline ?? b.airline,
+        confirmation: old.confirmation ?? b.confirmation,
+        ...(b.flightNumber && {
+          codeshares: [...new Set([...(old.codeshares ?? []), b.flightNumber])],
+        }),
+      };
+    }
+    // A time change moves the flight to its new key (unless that would clash).
+    const newKey = dedupeKey(merged as Booking);
     await tx`UPDATE trip_items SET details = ${tx.json(merged as never)}, item_date = ${start},
-               confirmation_ref = ${(merged as { confirmation?: string | null }).confirmation ?? null},
+               confirmation_ref = ${merged.confirmation ?? null},
+               dedupe_key = CASE WHEN EXISTS (SELECT 1 FROM trip_items
+                                              WHERE dedupe_key = ${newKey} AND id <> ${existing.id})
+                                 THEN dedupe_key ELSE ${newKey} END,
                source_message_id = ${messageId},
                updated_at = now()
              WHERE id = ${existing.id}`;
@@ -337,11 +369,34 @@ async function refreshTrip(tx: TransactionSql, tripId: string) {
            WHERE id = ${tripId}`;
 }
 
-/** Where the trip goes: the first hotel's city, else where the first flight lands. */
+/**
+ * Where the trip goes: the first hotel's city, else where the flights take you. Connections don't
+ * count: on a round trip it's the stop with the longest stay before flying home, otherwise where
+ * the last flight lands.
+ */
 export function destinationOf(bookings: Booking[]): string | null {
   for (const b of bookings) if (b.kind === "hotel" && b.city) return b.city;
-  for (const b of bookings) if (b.kind === "flight") return b.toCity ?? b.toCode;
-  return null;
+  const legs = bookings
+    .filter((b): b is Extract<Booking, { kind: "flight" }> => b.kind === "flight")
+    .sort((a, b) => (a.departAt ?? "").localeCompare(b.departAt ?? ""));
+  const first = legs[0];
+  const last = legs.at(-1);
+  if (!first || !last) return null;
+  const home =
+    legs.length > 1 &&
+    (first.fromCode && last.toCode
+      ? first.fromCode === last.toCode
+      : !!first.fromCity && first.fromCity.toLowerCase() === last.toCity?.toLowerCase());
+  let stop = home ? first : last;
+  if (home) {
+    let longest = -1;
+    for (const [i, leg] of legs.slice(0, -1).entries()) {
+      const stay =
+        Date.parse(legs[i + 1]!.departAt ?? "") - Date.parse(leg.arriveAt ?? leg.departAt ?? "");
+      if (stay > longest) [longest, stop] = [stay, leg];
+    }
+  }
+  return stop.toCity ?? stop.toCode;
 }
 
 export async function upcomingTrips(sql: Sql, userId: string): Promise<TripView[]> {

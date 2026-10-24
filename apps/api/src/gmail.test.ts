@@ -9,7 +9,8 @@ import {
   type FoundBooking,
 } from "./bookings.js";
 import { loadConfig } from "./config.js";
-import { checkState, describeBooking, signState, when } from "./gmail.js";
+import { readFileSync } from "node:fs";
+import { checkState, describeBooking, destinationOf, signState, when } from "./gmail.js";
 import { GoogleAuthError, type Google, type MailMessage } from "./google.js";
 import { FakeBrowserUse, FakeSearch, FakeTravila, testDatabase } from "./testkit.js";
 
@@ -259,6 +260,37 @@ describe("booking emails", () => {
     expect(b).toMatchObject({ flightNumber: "NH 7", fromCode: null });
     expect((b as { toCity: string }).toCity.length).toBe(60);
     expect(dedupeKey(b)).toBe("flight:nh7:2026-11-03");
+    // The same flight under two numbers (a codeshare) has one key.
+    const jl = flight({ flightNumber: "JL 8325", departAt: "2026-09-29T11:40" });
+    const aa = flight({ flightNumber: "AA 6488", departAt: "2026-09-29T11:40" });
+    expect(dedupeKey(jl)).toBe("flight:sfo-nrt:2026-09-29t11:40");
+    expect(dedupeKey(aa)).toBe(dedupeKey(jl));
+  });
+
+  it("names a trip after where it goes, not where it connects", () => {
+    const leg = (from: string, to: string, toCity: string, departAt: string, arriveAt: string) =>
+      flight({ fromCode: from, toCode: to, toCity, departAt, arriveAt });
+    // One way with connections: where the last flight lands.
+    expect(
+      destinationOf([
+        leg("HND", "SIN", "Singapore", "2026-10-01T00:05", "2026-10-01T06:30"),
+        leg("YYZ", "ORD", "Chicago", "2026-09-29T11:40", "2026-09-29T13:10"),
+        leg("ORD", "HND", "Tokyo", "2026-09-29T14:10", "2026-09-30T17:25"),
+      ]),
+    ).toBe("Singapore");
+    // A round trip: the longest stay before flying home, not the connection.
+    expect(
+      destinationOf([
+        leg("SFO", "HNL", "Honolulu", "2026-11-01T08:00", "2026-11-01T11:00"),
+        leg("HNL", "NRT", "Tokyo", "2026-11-01T13:00", "2026-11-02T17:00"),
+        leg("NRT", "SFO", "San Francisco", "2026-11-08T17:00", "2026-11-08T10:00"),
+      ]),
+    ).toBe("Tokyo");
+    // A hotel says where the trip is.
+    expect(destinationOf([leg("SFO", "NRT", "Tokyo", "2026-11-01T08:00", ""), hotel])).toBe(
+      "Tokyo",
+    );
+    expect(destinationOf([])).toBeNull();
   });
 
   it("describes bookings in plain words, keeping the airport's local time", () => {
@@ -407,5 +439,167 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     expect(start.headers.location).toMatch(/gmail=unavailable$/);
     const signedOut = await app.inject({ method: "GET", url: "/connectors/gmail/start" });
     expect(signedOut.headers.location).toBe("/sign-in");
+  });
+
+  it("keeps a codeshare flight once and names the trip after where it ends", async () => {
+    const cookie = await signUp();
+    google.mail = [mailOf("jl", 30), mailOf("aa", 20), mailOf("bare", 10)];
+    const leg = { fromCode: "YYZ", fromCity: "Toronto", toCode: "ORD", toCity: "Chicago" };
+    const at = { departAt: future(20, "11:40"), arriveAt: future(20, "13:10") };
+    reader.byMail.set("jl", [
+      flight({ ...leg, ...at, airline: "Japan Airlines", flightNumber: "JL 8325" }),
+      flight({
+        fromCode: "ORD",
+        fromCity: "Chicago",
+        toCode: "HND",
+        toCity: "Tokyo",
+        airline: "Japan Airlines",
+        flightNumber: "JL 9",
+        departAt: future(20, "14:10"),
+        arriveAt: future(21, "17:25"),
+      }),
+      flight({
+        fromCode: "HND",
+        fromCity: "Tokyo",
+        toCode: "SIN",
+        toCity: "Singapore",
+        airline: "Japan Airlines",
+        flightNumber: "JL 35",
+        departAt: future(22, "00:05"),
+        arriveAt: future(22, "06:30"),
+      }),
+    ]);
+    reader.byMail.set("aa", [
+      flight({ ...leg, ...at, airline: "American Airlines", flightNumber: "AA 6488" }),
+    ]);
+    reader.byMail.set("bare", [flight({ ...leg, ...at, flightNumber: null, confirmation: null })]);
+    await connect(cookie);
+
+    const [trip] = (await status(cookie)).trips;
+    expect(trip.title).toBe("Trip to Singapore");
+    expect(trip.bookings).toHaveLength(3);
+    expect(trip.bookings[0]).toMatchObject({
+      flightNumber: "JL 8325",
+      airline: "Japan Airlines",
+      confirmation: "ABC123",
+      codeshares: ["AA 6488"],
+    });
+
+    // A later email under the codeshare number still finds the flight: a time change moves it.
+    await sql!`UPDATE connector_accounts SET last_synced_at = now() - interval '1 hour'
+               WHERE account_email = 'traveller@gmail.com'`;
+    google.mail.push(mailOf("aa2", 5));
+    reader.byMail.set("aa2", [
+      flight({ ...leg, departAt: future(20, "12:00"), flightNumber: "AA 6488" }),
+    ]);
+    await mainMessages(cookie);
+    await settle();
+    const [after] = (await status(cookie)).trips;
+    expect(after.bookings).toHaveLength(3);
+    expect(after.bookings[0]).toMatchObject({
+      flightNumber: "JL 8325",
+      departAt: future(20, "12:00"),
+    });
+  });
+
+  it("cleans up codeshare copies and connection-named trips saved before (migration 0014)", async () => {
+    await signUp();
+    const [user] = await sql!<
+      { id: string }[]
+    >`SELECT id FROM users ORDER BY created_at DESC LIMIT 1`;
+    const userId = user!.id;
+    const fly = (from: string, to: string, toCity: string, departAt: string, more = {}) => ({
+      kind: "flight",
+      airline: "Japan Airlines",
+      flightNumber: null,
+      fromCode: from,
+      fromCity: null,
+      toCode: to,
+      toCity,
+      departAt,
+      arriveAt: null,
+      confirmation: null,
+      ...more,
+    });
+    const trip = async (title: string, items: [string, Record<string, unknown>][]) => {
+      const [t] = await sql!<{ id: string }[]>`
+        INSERT INTO trips (user_id, status, title) VALUES (${userId}, 'booked', ${title}) RETURNING id`;
+      for (const [key, d] of items) {
+        await sql!`INSERT INTO trip_items (user_id, trip_id, kind, item_date, details, dedupe_key, source)
+                   VALUES (${userId}, ${t!.id}, 'booking', ${String(d.departAt).slice(0, 10)},
+                           ${sql!.json(d as never)}, ${key}, 'gmail')`;
+      }
+      return t!.id;
+    };
+    const oneWay = await trip("Trip to Chicago", [
+      [
+        "flight:jl8325:2026-09-29",
+        fly("YYZ", "ORD", "Chicago", "2026-09-29T11:40", {
+          flightNumber: "JL 8325",
+          confirmation: "QX1",
+        }),
+      ],
+      [
+        "flight:yyz-ord:2026-09-29",
+        fly("YYZ", "ORD", "Chicago", "2026-09-29T11:40", { arriveAt: "2026-09-29T13:10" }),
+      ],
+      [
+        "flight:aa6488:2026-09-29",
+        fly("YYZ", "ORD", "Chicago", "2026-09-29T11:40", {
+          flightNumber: "AA 6488",
+          airline: "American Airlines",
+        }),
+      ],
+      [
+        "flight:jl9:2026-09-29",
+        fly("ORD", "HND", "Tokyo", "2026-09-29T14:10", { arriveAt: "2026-09-30T17:25" }),
+      ],
+      [
+        "flight:jl35:2026-10-01",
+        fly("HND", "SIN", "Singapore", "2026-10-01T00:05", { arriveAt: "2026-10-01T06:30" }),
+      ],
+    ]);
+    const roundTrip = await trip("Trip to Honolulu", [
+      [
+        "flight:ua1:2026-11-01",
+        fly("SFO", "HNL", "Honolulu", "2026-11-01T08:00", { arriveAt: "2026-11-01T11:00" }),
+      ],
+      [
+        "flight:ha1:2026-11-01",
+        fly("HNL", "NRT", "Tokyo", "2026-11-01T13:00", { arriveAt: "2026-11-02T17:00" }),
+      ],
+      [
+        "flight:nh8:2026-11-08",
+        fly("NRT", "SFO", "San Francisco", "2026-11-08T17:00", { arriveAt: "2026-11-08T10:00" }),
+      ],
+    ]);
+
+    const up = readFileSync(
+      new URL("../../../packages/db/migrations/0014_flight_codeshares.up.sql", import.meta.url),
+      "utf8",
+    );
+    await sql!.begin((tx) => tx.unsafe(up));
+
+    const items = await sql!<
+      { details: Record<string, unknown>; dedupe_key: string; confirmation_ref: string | null }[]
+    >`
+      SELECT details, dedupe_key, confirmation_ref FROM trip_items
+      WHERE trip_id = ${oneWay} ORDER BY details->>'departAt'`;
+    expect(items).toHaveLength(3);
+    expect(items[0]!.details).toMatchObject({
+      flightNumber: "JL 8325",
+      airline: "Japan Airlines",
+      arriveAt: "2026-09-29T13:10",
+      confirmation: "QX1",
+      codeshares: ["AA 6488"],
+    });
+    expect(items[0]!.confirmation_ref).toBe("QX1");
+    expect(items[0]!.dedupe_key).toBe("flight:yyz-ord:2026-09-29t11:40");
+    const titles = await sql!<{ id: string; title: string; starts_on: Date; ends_on: Date }[]>`
+      SELECT id, title, starts_on, ends_on FROM trips WHERE id IN (${oneWay}, ${roundTrip})`;
+    const byId = new Map(titles.map((t) => [t.id, t]));
+    expect(byId.get(oneWay)!.title).toBe("Trip to Singapore");
+    expect(byId.get(roundTrip)!.title).toBe("Trip to Tokyo");
+    expect(byId.get(roundTrip)!.ends_on.toISOString().slice(0, 10)).toBe("2026-11-08");
   });
 });

@@ -216,6 +216,8 @@ export type Booking =
       departAt: string | null;
       arriveAt: string | null;
       confirmation: string | null;
+      /** The same flight's other numbers (codeshares), like ["AA 6488"]. */
+      codeshares?: string[];
     }
   | {
       kind: "hotel";

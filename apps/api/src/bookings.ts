@@ -82,13 +82,18 @@ export function cleanBooking(raw: unknown): FoundBooking | null {
   return null;
 }
 
-/** The key that makes a change email update a booking instead of adding a second one. */
+/**
+ * The key that makes a change email update a booking instead of adding a second one. A flight is
+ * known by its route and departure time, since codeshare emails give the same flight different
+ * numbers ("JL 8325" from the airline sold it, "AA 6488" from the one that flies it).
+ */
 export function dedupeKey(b: Booking): string {
   if (b.kind === "flight") {
-    const date = b.departAt?.slice(0, 10);
-    const id =
-      b.flightNumber?.replace(" ", "") ?? `${b.fromCode ?? b.fromCity}-${b.toCode ?? b.toCity}`;
-    return `flight:${id}:${date}`.toLowerCase();
+    const from = b.fromCode ?? b.fromCity;
+    const to = b.toCode ?? b.toCity;
+    if (from && to) return `flight:${from}-${to}:${b.departAt}`.toLowerCase();
+    const id = b.flightNumber?.replace(" ", "") ?? `${from}-${to}`;
+    return `flight:${id}:${b.departAt?.slice(0, 10)}`.toLowerCase();
   }
   return `hotel:${b.confirmation ?? b.name}:${b.checkIn}`.toLowerCase();
 }

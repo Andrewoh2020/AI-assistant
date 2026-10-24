@@ -48,3 +48,7 @@ setup, rebuilds and restarts yourself.
 - The browser (Browser Use) must never buy or pay. A run's cost setting is a cap, not the price
   (real runs cost under a cent); say "cap" when showing it.
 - Tests: Postgres at `postgres://postgres:postgres@localhost:5432/ai_assistant_test`, `pnpm test`.
+  On Andrew's Mac it's `postgres://andrewoh@localhost:5432/ai_assistant_test`; the database tests
+  are skipped unless `DATABASE_URL` points there.
+- Flights are matched by route and departure time, not flight number: codeshare emails give the
+  same flight different numbers (kept as `codeshares`).
