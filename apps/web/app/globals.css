@@ -1600,13 +1600,51 @@ dialog.confirm p {
 .row-confirm p {
   margin: 0;
 }
-/* Connected accounts: the account row ends with its Connect button. */
+/* Connected accounts: the account row ends with its Connect button, or a "Connected" pill whose
+   menu disconnects it. */
 .row-account .btn {
   flex: none;
   text-decoration: none;
 }
-.row-trip .row-text {
-  gap: 2px;
+.row-account .more {
+  flex: none;
+}
+.row-account .row-text {
+  min-width: 0;
+}
+.row-account .row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Let the pill's menu hang below the list instead of being cut off by its rounded corners. */
+.group:has(.row-account .more) {
+  overflow: visible;
+}
+.connected-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 6px 10px 6px 12px;
+  background: var(--success-soft);
+  color: var(--success);
+  font: inherit;
+  font-size: var(--type-small-size);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.connected-pill svg {
+  width: 16px;
+  height: 16px;
+}
+.connected-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
 }
 /* Saved password on the login page: dots until Show. */
 .row-secret {
