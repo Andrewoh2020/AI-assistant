@@ -57,13 +57,28 @@ export function readShareToken(
   };
 }
 
+/** What a trip card still needs, in plain words. */
+const NEEDS: Partial<Record<FlightView["prep"]["required"][number], string>> = {
+  name: "name",
+  dateOfBirth: "date of birth",
+  gender: "gender",
+  nationality: "nationality",
+  passportNumber: "passport number",
+  passportExpiry: "passport expiry date",
+  knownTraveler: "Known Traveler number",
+  frequentFlyer: "frequent flyer number",
+  seatStyle: "seat style",
+  homeAddress: "home address",
+};
+
 function flightLine(f: FlightView): string {
   const parts = [
     `Trip card: ${f.flightNumber ?? f.airlineName ?? "Flight"} ${f.fromCode ?? ""} → ${f.toCode ?? ""}, ${f.departLocal?.replace("T", " ") ?? "time unknown"}.`,
     `Check-in: ${f.checkin.status}${f.checkin.auto ? "" : " (turned off)"}.`,
   ];
   if (f.confirmation) parts.push(`Booking ${f.confirmation}.`);
-  if (f.prep.required.length) parts.push(`Still needed: ${f.prep.required.join(", ")}.`);
+  if (f.prep.required.length)
+    parts.push(`Still needed: ${f.prep.required.map((k) => NEEDS[k] ?? k).join(", ")}.`);
   if (!f.prep.noBannedItems) parts.push(`"No banned items" not ticked.`);
   if (f.checkin.question) parts.push(`Airline asked: ${f.checkin.question}`);
   if (f.checkin.note) parts.push(`Note: ${f.checkin.note}`);

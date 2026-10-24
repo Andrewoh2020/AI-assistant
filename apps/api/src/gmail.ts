@@ -523,7 +523,7 @@ async function tellMainChat(tx: TransactionSql, userId: string, found: Booking[]
     : found.length === 1
       ? "A new booking just arrived in your Gmail:"
       : `${found.length} new bookings just arrived in your Gmail:`;
-  const text = `${lead}\n\n${lines.join("\n")}\n\nI've added ${found.length === 1 ? "it" : "them"} to your trips. You can see them in Settings › Connected accounts.`;
+  const text = `${lead}\n\n${lines.join("\n")}\n\nI've added ${found.length === 1 ? "it" : "them"} to your trips. Ask me about your trips any time.`;
   await tx`INSERT INTO messages (user_id, chat_id, role, parts, origin)
            VALUES (${userId}, ${main.id}, 'assistant',
                    ${tx.json([{ type: "text", text, citations: [] }] as never)}, 'proactive')`;
