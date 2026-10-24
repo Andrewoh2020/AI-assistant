@@ -545,7 +545,7 @@ function PrepForm({
           {need.has("passportNumber") && (
             <Field label="Passport number">
               <input
-                placeholder="Kept hidden"
+                placeholder="As on your passport"
                 value={v.passportNumber ?? ""}
                 onChange={(e) => set("passportNumber", e.target.value)}
                 autoComplete="off"

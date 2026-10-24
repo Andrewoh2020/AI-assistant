@@ -194,12 +194,16 @@ export async function messageViews(
       ).map(fileView),
       browsers: m.role === "assistant" && m.run_id ? (browsers.get(m.run_id) ?? []) : [],
       flight: flights.get(cardOf(m)?.tripItemId ?? "") ?? null,
+      card: chatCard(cardOf(m)?.kind),
       createdAt: new Date(m.created_at).toISOString(),
       runId: m.run_id,
       clientMessageId: m.client_message_id,
     };
   });
 }
+
+const chatCard = (kind: string | undefined): MessageView["card"] =>
+  kind === "travel" || kind === "gmail" ? kind : null;
 
 async function runView(deps: Deps, s: Session, run: RunRow): Promise<RunView> {
   const { sql } = deps;

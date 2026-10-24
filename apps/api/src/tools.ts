@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Booking } from "@ai-assistant/api-client";
-import { withUser, type Sql } from "@ai-assistant/db";
+import { withUser, type Sql, type TransactionSql } from "@ai-assistant/db";
 import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
@@ -302,10 +302,54 @@ export async function runTool(
         await finishToolCall(ctx, toolCallId, { status: "failed", decision: "allow", reason });
         return { error: `Not saved: ${reason}` };
       }
+      await postChatCard(
+        ctx,
+        "travel",
+        "Here are your travel details. Change anything by clicking it.",
+      );
       await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
       return {
         saved: given.map((k) => TRAVEL_LABELS[k as keyof PrepInput] ?? k),
-        next: "Saved to their travel details: every trip card and check-in uses them from now on.",
+        next: "Saved to their travel details, which every trip card and check-in uses. A Travel details card is now just above your reply, where they can check or change them.",
+      };
+    }
+
+    if (call.name === "show_travel_details") {
+      await postChatCard(
+        ctx,
+        "travel",
+        "Here are your travel details. Change anything by clicking it.",
+      );
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      return { shown: "A Travel details card is now just above your reply." };
+    }
+
+    if (call.name === "offer_gmail") {
+      const why =
+        (typeof args.why === "string" ? args.why.trim().slice(0, 300) : "") ||
+        "Connect Gmail and I can find things like this in your email by myself.";
+      // One step per reply at a time: two offers asked for at once must not both post a card.
+      const outcome = await withUser(ctx.sql, ctx.userId, async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${`${ctx.runId}:gmail`}))`;
+        const [state] = await tx<{ connected: boolean; offered: boolean }[]>`
+          SELECT
+            EXISTS (SELECT 1 FROM connector_accounts
+                    WHERE provider = 'gmail' AND status = 'connected') AS connected,
+            EXISTS (SELECT 1 FROM messages m JOIN runs r ON r.id = ${ctx.runId}
+                    WHERE m.chat_id = r.chat_id AND m.created_at >= r.created_at
+                      AND m.parts @> '[{"type": "card", "card": {"kind": "gmail"}}]') AS offered`;
+        if (state?.connected) return "connected";
+        if (state?.offered) return "offered";
+        await insertChatCard(tx, ctx, "gmail", why);
+        return "shown";
+      });
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      if (outcome === "connected")
+        return { already_connected: "Gmail is already connected; don't offer it." };
+      if (outcome === "offered") return { shown: "Already offered in this reply." };
+      return {
+        shown:
+          "A Connect Gmail card is now just above your reply. Don't repeat the offer in your reply.",
       };
     }
 
@@ -325,6 +369,30 @@ export async function runTool(
         "The tool failed. Try again once, or answer without it and say what you couldn't check.",
     };
   }
+}
+
+/**
+ * Puts a card (Travel details, or a Connect Gmail offer) in the chat the reply is for, as its
+ * own message just above the reply, like a flight's trip card.
+ */
+async function postChatCard(ctx: ToolContext, kind: "travel" | "gmail", text: string) {
+  await withUser(ctx.sql, ctx.userId, (tx) => insertChatCard(tx, ctx, kind, text));
+}
+
+async function insertChatCard(
+  tx: TransactionSql,
+  ctx: ToolContext,
+  kind: "travel" | "gmail",
+  text: string,
+) {
+  const parts = [
+    { type: "text", text, citations: [] },
+    { type: "card", card: { kind } },
+  ];
+  await tx`
+    INSERT INTO messages (user_id, chat_id, role, parts, origin)
+    SELECT ${ctx.userId}, chat_id, 'assistant', ${tx.json(parts as never)}, 'proactive'
+    FROM runs WHERE id = ${ctx.runId}`;
 }
 
 const TRAVEL_FIELDS: Record<string, keyof PrepInput> = {
@@ -443,6 +511,8 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
   if (calls.some((c) => c.name === "save_flight" || c.name === "save_hotel"))
     return "Saving your booking";
   if (calls.some((c) => c.name === "save_travel_details")) return "Saving your travel details";
+  if (calls.some((c) => c.name === "show_travel_details")) return "Opening your travel details";
+  if (calls.some((c) => c.name === "offer_gmail")) return "Working";
   return "Working";
 }
 

@@ -1681,6 +1681,10 @@ dialog.confirm p {
 .field-inline::placeholder {
   color: var(--ink-2);
 }
+.field-required {
+  margin-left: 2px;
+  color: var(--danger);
+}
 .field-status {
   margin: -6px 16px 14px;
   color: var(--ink-2);
@@ -2109,4 +2113,18 @@ dialog.confirm p {
 .share-error {
   display: block;
   margin-top: 8px;
+}
+
+/* Cards the assistant puts in the chat (Travel details, Connect Gmail), styled like Settings. */
+.chat-sheet-card {
+  background: #ededf2;
+  border-radius: var(--radius-l);
+  padding: 12px 12px 0;
+  margin: 8px 0;
+  width: min(480px, 100%);
+}
+.chat-sheet-title {
+  margin: 4px 4px 10px;
+  font-size: var(--type-small-size);
+  font-weight: 650;
 }

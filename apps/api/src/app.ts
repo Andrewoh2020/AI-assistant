@@ -870,19 +870,39 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   // Connected on Travila's hosted connect page (Pipedream), then the app reads booking emails to
   // find trips.
 
-  const gmailCallback = (req: FastifyRequest, state: string, outcome: "ok" | "error") => {
+  const gmailCallback = (
+    req: FastifyRequest,
+    state: string,
+    outcome: "ok" | "error",
+    chat: string | null,
+  ) => {
     const base =
       config.publicUrl ||
       `${config.secureCookies ? "https" : String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers["x-forwarded-host"] ?? req.headers.host}`;
-    return `${base}/api/connectors/gmail/callback?${new URLSearchParams({ state, outcome })}`;
+    const q = new URLSearchParams({ state, outcome, ...(chat ? { chat } : {}) });
+    return `${base}/api/connectors/gmail/callback?${q}`;
   };
 
-  /** Back to the Main chat with Settings open on Connected accounts. */
-  const backToSettings = async (s: Session, reply: FastifyReply, result: string) => {
-    const [main] = (await listChats(sql, s)).filter((c) => c.kind === "main");
+  /**
+   * Back to the chat whose Connect Gmail card was used, or else to the Main chat with Settings
+   * open on Connected accounts.
+   */
+  const backToSettings = async (
+    s: Session,
+    reply: FastifyReply,
+    result: string,
+    chat?: string | null,
+  ) => {
+    const chats = await listChats(sql, s);
+    if (chat && chats.some((c) => c.id === chat)) {
+      return reply.redirect(`/chat/${chat}?gmail=${result}`);
+    }
+    const [main] = chats.filter((c) => c.kind === "main");
     const q = `settings=connections&gmail=${result}`;
     return reply.redirect(main ? `/chat/${main.id}?${q}` : `/?${q}`);
   };
+  const chatParam = (v: unknown) =>
+    typeof v === "string" && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
 
   app.get("/connectors/gmail", async (req, reply) => {
     const s = requireSession(req, reply);
@@ -891,42 +911,49 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return gmailStatus(gmailDeps, s.userId);
   });
 
-  app.get("/connectors/gmail/start", async (req, reply) => {
+  app.get<{ Querystring: { chat?: string } }>("/connectors/gmail/start", async (req, reply) => {
     const s = req.session;
     if (!s) return reply.redirect("/sign-in");
     const state = signState(s.userId, config.sessionSecret);
+    const chat = chatParam(req.query.chat);
     let url;
     try {
       url = await gmailDeps.google.connectUrl(
         s.travilaUserId,
-        gmailCallback(req, state, "ok"),
-        gmailCallback(req, state, "error"),
+        gmailCallback(req, state, "ok", chat),
+        gmailCallback(req, state, "error", chat),
       );
     } catch (err) {
       app.log.error(err);
-      return backToSettings(s, reply, "unavailable");
+      return backToSettings(s, reply, "unavailable", chat);
     }
     return reply.redirect(url);
   });
 
-  app.get<{ Querystring: { state?: string; outcome?: string } }>(
+  app.get<{ Querystring: { state?: string; outcome?: string; chat?: string } }>(
     "/connectors/gmail/callback",
     async (req, reply) => {
       const s = req.session;
       if (!s) return reply.redirect("/sign-in");
       const { state, outcome } = req.query;
+      const chat = chatParam(req.query.chat);
       if (!state || !checkState(state, s.userId, config.sessionSecret)) {
-        return backToSettings(s, reply, "failed");
+        return backToSettings(s, reply, "failed", chat);
       }
-      if (outcome !== "ok") return backToSettings(s, reply, "cancelled");
+      if (outcome !== "ok") return backToSettings(s, reply, "cancelled", chat);
       try {
         await connectGmail(gmailDeps, s.userId, s.travilaUserId);
       } catch (err) {
         if (!(err instanceof GoogleAuthError)) app.log.error(err);
-        return backToSettings(s, reply, err instanceof GoogleAuthError ? "cancelled" : "failed");
+        return backToSettings(
+          s,
+          reply,
+          err instanceof GoogleAuthError ? "cancelled" : "failed",
+          chat,
+        );
       }
       later(syncGmail(gmailDeps, s.userId).then(() => planFlights(flightDeps, s.userId)));
-      return backToSettings(s, reply, "connected");
+      return backToSettings(s, reply, "connected", chat);
     },
   );
 

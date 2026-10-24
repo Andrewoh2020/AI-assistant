@@ -87,6 +87,8 @@ export interface MessageView {
   browsers: BrowserView[];
   /** A trip card for a flight, shown under the text (live: it changes as the flight nears). */
   flight: FlightView | null;
+  /** A card the assistant put in the chat: the person's travel details, or a Connect Gmail offer. */
+  card: "travel" | "gmail" | null;
   createdAt: string;
   runId: string | null;
   clientMessageId: string | null;
@@ -542,7 +544,9 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
       call<{ imported: number; replaced: number }>("POST", "/vault/import", input),
     gmail: () => call<GmailStatus>("GET", "/connectors/gmail"),
     /** Where the browser goes to connect Gmail (the hosted connect page, then back to the app). */
-    gmailConnectUrl: () => `${baseUrl}/connectors/gmail/start`,
+    /** chatId: come back to that chat afterwards, instead of Settings. */
+    gmailConnectUrl: (chatId?: string) =>
+      `${baseUrl}/connectors/gmail/start${chatId ? `?chat=${encodeURIComponent(chatId)}` : ""}`,
     disconnectGmail: () => call<{ ok: true }>("DELETE", "/connectors/gmail"),
     /** Upcoming flights' trip cards, soonest first. Also moves along any check-in in progress. */
     flights: () => call<{ flights: FlightView[] }>("GET", "/flights"),
