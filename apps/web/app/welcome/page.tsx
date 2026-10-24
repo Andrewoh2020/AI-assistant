@@ -145,9 +145,12 @@ export default function Welcome() {
           </p>
         )}
 
+        {/* Keys keep each button its own element: reusing Skip as "Not now" made one click on Skip
+            also submit the Gmail step, so the Gmail offer was never seen. */}
         {step === "gmail" ? (
           <>
             <button
+              key="connect"
               className="btn btn-primary btn-block"
               type="button"
               disabled={busy}
@@ -155,13 +158,14 @@ export default function Welcome() {
             >
               Connect Gmail
             </button>
-            <button className="btn btn-ghost btn-block" type="submit" disabled={busy}>
+            <button key="not-now" className="btn btn-ghost btn-block" type="submit" disabled={busy}>
               {busy ? "Saving…" : "Not now"}
             </button>
           </>
         ) : (
           <>
             <button
+              key="continue"
               className="btn btn-primary btn-block"
               type="submit"
               disabled={step === "birthday" && !birthday}
@@ -170,6 +174,7 @@ export default function Welcome() {
             </button>
             {step === "birthday" && (
               <button
+                key="skip"
                 className="btn btn-ghost btn-block"
                 type="button"
                 onClick={() => void next(undefined, { skip: true })}
