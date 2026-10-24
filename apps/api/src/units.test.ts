@@ -16,7 +16,15 @@ import {
 import { cleanFileName } from "./files.js";
 import { extractText } from "./extract.js";
 import { jobTitle, plainAsk } from "./browser.js";
-import { TOOLS } from "@ai-assistant/agent";
+import {
+  MAIN_INSTRUCTIONS,
+  MAX_LOOPS,
+  MODELS,
+  PROFILE_VERSION,
+  REASONING_EFFORT,
+  TOOLS,
+} from "@ai-assistant/agent";
+import { createHash } from "node:crypto";
 import { readShareToken, shareToken } from "./share.js";
 
 describe("SSRF block", () => {
@@ -308,5 +316,20 @@ describe("2-step codes", () => {
     expect(parseTotpKey("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP")).toBeNull();
     expect(parseTotpKey("123456")).toBeNull();
     expect(parseTotpKey("steam://ABCDEF")).toBeNull();
+  });
+});
+
+describe("assistant profile version", () => {
+  // Chats only pick up new instructions or tools when PROFILE_VERSION changes. If this fails, bump
+  // PROFILE_VERSION in packages/agent and put the new version and fingerprint here.
+  it("changes whenever the instructions or tools change", () => {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify([MAIN_INSTRUCTIONS, TOOLS, MODELS, REASONING_EFFORT, MAX_LOOPS]))
+      .digest("hex")
+      .slice(0, 16);
+    expect({ version: PROFILE_VERSION, fingerprint }).toEqual({
+      version: "main-2026-10-25a",
+      fingerprint: "5e718b192529cf38",
+    });
   });
 });
