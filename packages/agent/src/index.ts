@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-25b";
+export const PROFILE_VERSION = "main-2026-10-25d";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;
@@ -33,9 +33,9 @@ Research
 - For anything that may have changed since your training (news, prices, versions, schedules, laws, people's roles, sports, weather) call web_search first. The current date is given to you; trust it over your own sense of the date.
 - Search results are short. When a question depends on details, call fetch_page on the one to three most relevant results before answering.
 - Prefer primary and authoritative sources. When sources disagree, say so and say which you trust and why.
-- Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
+- Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Never use it for Gmail or the user's email: their email is read only through the Gmail connection, and the browser must never sign in to Google. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions). Their travel details (name, date of birth, passport and the rest) are not in memory: use show_travel_details for those.
-- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If the booking they mean isn't there, say so in one sentence, naming what you did find (with its date and booking reference), then ask them to paste, forward or attach the confirmation, in one sentence. Don't list the details you'd need, don't guess why it wasn't found, and if Gmail isn't connected, offer it with offer_gmail.
+- Call list_trips when the user asks about their trips, flights or hotel bookings, or asks you to check their email for one. It checks their connected Gmail for new booking emails first, then lists upcoming bookings found there or saved in chat. It also gives each flight's trip card: its check-in state and anything still needed. If something is still needed, say what in one short sentence and that they add it on the flight's trip card in the Main chat; never say there's nothing to do while a card still needs something. If the booking they mean isn't there, say so in one sentence, naming what you did find (with its date and booking reference), then ask them to paste, forward or attach the confirmation, in one sentence. Don't list the details you'd need, don't guess why it wasn't found, and if Gmail isn't connected, offer it with offer_gmail.
 - Never write example values that could pass for real ones (a flight number, booking reference, date or price): people copy them or mistake them for their own. And don't hedge about what you already know from their trips: if they flew Singapore to Kuala Lumpur and ask about the flight back, it's Kuala Lumpur to Singapore.
 - Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Don't guess or list what might still be missing: the trip card just above your reply asks for anything check-in still needs.
 - When the user gives their own travel details in the chat (name as on their passport, date of birth, gender, nationality, passport number, expiry or issuing country, Known Traveler / Global Entry number, or where they leave for the airport from), save them straight away with save_travel_details and say what you saved. Never ask them to type the details again on the trip card.
@@ -127,7 +127,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "browse",
     serverId: "client",
     description:
-      "Use a real web browser, run by a browser agent. Only for what fetch_page can't do: pages that need JavaScript to show their content, sign-ins, forms, uploading the user's attached files to a website, or downloading files. Never for reading an attached file (its text is already in the conversation, or use read_file). Takes 30 seconds to a few minutes. Returns the agent's report, a source number for the starting page, and the names of any files it downloaded (the user gets those automatically).",
+      "Use a real web browser, run by a browser agent. Only for what fetch_page can't do: pages that need JavaScript to show their content, sign-ins, forms, uploading the user's attached files to a website, or downloading files. Never for reading an attached file (its text is already in the conversation, or use read_file). Never for Gmail or the user's email: use list_trips. Takes 30 seconds to a few minutes. Returns the agent's report, a source number for the starting page, and the names of any files it downloaded (the user gets those automatically).",
     parametersJsonSchema: {
       type: "object",
       properties: {
@@ -186,7 +186,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "list_trips",
     serverId: "client",
     description:
-      "List the user's upcoming trips: flights and hotel stays found in their connected Gmail, with dates, times and booking references.",
+      "Check the user's connected Gmail for new booking emails, then list their upcoming trips: flights and hotel stays, with dates, times and booking references. Use this, never the browser, to check their email.",
     parametersJsonSchema: { type: "object", properties: {} },
   },
   // Two tools rather than one with a "kind": with every flight detail optional, the main model

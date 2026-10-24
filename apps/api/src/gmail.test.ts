@@ -112,6 +112,7 @@ const mailOf = (id: string, ageMinutes = 10): MailMessage => ({
 let sql: Sql | null = null;
 let google: FakeGoogle;
 let reader: FakeReader;
+let travila: FakeTravila;
 let pending: Promise<unknown>[] = [];
 let app: ReturnType<typeof buildApp>;
 const config = { ...loadConfig({}), signupCode: "invite-123" };
@@ -125,12 +126,13 @@ afterAll(async () => {
 beforeEach(() => {
   google = new FakeGoogle();
   reader = new FakeReader();
+  travila = new FakeTravila();
   pending = [];
   if (sql)
     app = buildApp({
       config,
       sql,
-      travila: new FakeTravila(),
+      travila,
       search: new FakeSearch(),
       browser: new FakeBrowserUse(),
       google,
@@ -558,8 +560,12 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     const sin: [string, string] = ["SIN", "Singapore"];
     // The flight home arrives first; the outbound a week earlier joins it.
     google.mail = [mailOf("home", 30), mailOf("out", 20), mailOf("next", 10)];
-    reader.byMail.set("home", [leg(sin, sfo, 27, { flightNumber: "SQ 34" })]);
-    reader.byMail.set("out", [leg(sfo, sin, 20, { flightNumber: "SQ 33" })]);
+    reader.byMail.set("home", [
+      leg(sin, sfo, 27, { flightNumber: "SQ 34", confirmation: "HOME11" }),
+    ]);
+    reader.byMail.set("out", [
+      leg(sfo, sin, 20, { flightNumber: "SQ 33", confirmation: "OUT222" }),
+    ]);
     // Home again, a new trip 10 days later is a trip of its own.
     reader.byMail.set("next", [
       leg(sfo, ["NRT", "Tokyo"], 38, { flightNumber: "NH 7" }),
@@ -587,8 +593,12 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     // Lives in Singapore: flying home from Toronto, then to Kuala Lumpur three weeks later.
     const sg = await signUp("Asia/Singapore");
     google.mail = [mailOf("home", 20), mailOf("kl", 10)];
-    reader.byMail.set("home", [flightOn("YYZ", "SIN", "Singapore", 20, "JL 35")]);
-    reader.byMail.set("kl", [flightOn("SIN", "KUL", "Kuala Lumpur", 41, "AK 706")]);
+    reader.byMail.set("home", [
+      { ...flightOn("YYZ", "SIN", "Singapore", 20, "JL 35"), confirmation: "JL3500" },
+    ]);
+    reader.byMail.set("kl", [
+      { ...flightOn("SIN", "KUL", "Kuala Lumpur", 41, "AK 706"), confirmation: "AK7060" },
+    ]);
     await connect(sg);
     expect(((await status(sg)).trips as { title: string }[]).map((t) => t.title)).toEqual([
       "Trip to Singapore",
@@ -598,10 +608,59 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     // No time zone on the account: a flight a week later isn't joined on a guess.
     const unknown = await signUp();
     google.mail = [mailOf("out", 20), mailOf("back", 10)];
-    reader.byMail.set("out", [flightOn("SFO", "SIN", "Singapore", 20, "SQ 33")]);
-    reader.byMail.set("back", [flightOn("SIN", "SFO", "San Francisco", 27, "SQ 34")]);
+    reader.byMail.set("out", [
+      { ...flightOn("SFO", "SIN", "Singapore", 20, "SQ 33"), confirmation: "OUT111" },
+    ]);
+    reader.byMail.set("back", [
+      { ...flightOn("SIN", "SFO", "San Francisco", 27, "SQ 34"), confirmation: "BACK22" },
+    ]);
     await connect(unknown);
     expect(((await status(unknown)).trips as unknown[]).length).toBe(2);
+
+    // Both legs on one booking (a round trip in one email) are one trip, time zone or not.
+    const roundTrip = await signUp();
+    google.mail = [mailOf("rt", 10)];
+    reader.byMail.set("rt", [
+      { ...flightOn("SIN", "KUL", "Kuala Lumpur", 20, "AK 706"), confirmation: "NIUR5X" },
+      { ...flightOn("KUL", "SIN", "Singapore", 23, "AK 705"), confirmation: "NIUR5X" },
+    ]);
+    await connect(roundTrip);
+    const trips = (await status(roundTrip)).trips as { title: string; bookings: unknown[] }[];
+    expect(trips.map((t) => [t.title, t.bookings.length])).toEqual([["Trip to Kuala Lumpur", 2]]);
+  });
+
+  it("checks Gmail before listing trips, so a booking email that just came is found", async () => {
+    const cookie = await signUp();
+    await connect(cookie);
+    // The email comes after the last check, before the next one is due.
+    google.mail = [mailOf("new", 1)];
+    reader.byMail.set("new", [flight()]);
+    const chats = (await app.inject({ method: "GET", url: "/chats", headers: { cookie } })).json();
+    const main = chats.chats.find((c: { kind: string }) => c.kind === "main").id;
+    await settle();
+    expect(reader.reads).toBe(0);
+
+    travila.scripts.push([
+      { tools: [{ name: "list_trips", args: {} }] },
+      { answer: "Your flight to Tokyo is booked." },
+    ]);
+    const sent = await app.inject({
+      method: "POST",
+      url: `/chats/${main}/messages`,
+      headers: { cookie },
+      payload: { text: "Check my email for my flight", clientMessageId: crypto.randomUUID() },
+    });
+    for (let i = 0; i < 20; i++) {
+      const run = (
+        await app.inject({ method: "GET", url: `/runs/${sent.json().run.id}`, headers: { cookie } })
+      ).json().run;
+      await settle();
+      if (["completed", "failed", "cancelled"].includes(run.status)) break;
+    }
+    const result = JSON.stringify(travila.submitted.at(-1)!.results);
+    expect(result).toContain("NH 7");
+    // With each flight's trip card: what check-in still needs.
+    expect(result).toContain("Still needed: name");
   });
 
   it("joins trips that were split in two before (migration 0015)", async () => {
