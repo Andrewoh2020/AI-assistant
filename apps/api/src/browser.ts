@@ -8,7 +8,7 @@ import {
 } from "@ai-assistant/db";
 import type { BrowserView } from "@ai-assistant/api-client";
 import { openSecret, sealSecret } from "./auth.js";
-import { isTerminal, type BrowserUse, type BuEvent } from "./browseruse.js";
+import { isTerminal, type BrowserUse, type BuEvent, type SecretBinding } from "./browseruse.js";
 import { MAX_FILE_BYTES, mimeFor, readFile, saveFile } from "./files.js";
 import { BadRequest, Conflict, NotFound } from "./errors.js";
 import { detectInjection, fence } from "./untrusted.js";
@@ -44,6 +44,11 @@ export interface BrowserDeps {
   checkGapMs?: number;
   /** The vault's master key; derived from `secret` when not given. */
   vaultKey?: VaultKey;
+  /**
+   * Hidden values a flight's browser session needs on every run (passport and similar, typed
+   * only into the airline's or government's site). Chat browse calls have none.
+   */
+  extraSecrets?: (userId: string, s: BrowserSessionRow) => Promise<SecretBinding[]>;
 }
 
 export const vaultKey = (deps: Pick<BrowserDeps, "vaultKey" | "secret">) =>
@@ -51,7 +56,14 @@ export const vaultKey = (deps: Pick<BrowserDeps, "vaultKey" | "secret">) =>
 
 export interface BrowseContext {
   userId: string;
-  runId: string;
+  /** The reply behind a chat browse call; null for a flight's check-in or arrival card. */
+  runId: string | null;
+}
+
+/** The hidden values a follow-up run in this session gets on top of its own. */
+async function moreSecrets(deps: BrowserDeps, userId: string, s: BrowserSessionRow) {
+  if (s.purpose === "chat" || !deps.extraSecrets) return [];
+  return deps.extraSecrets(userId, s);
 }
 
 /** Spending cap for one browse run (Browser Use stops the run when it is reached). */
@@ -222,6 +234,92 @@ export async function startBrowse(
 }
 
 /**
+ * Starts a browser session for a flight (a check-in or an arrival card): no chat reply is behind
+ * it, so it belongs to the flight and its files go to `chatId`. Returns the new session's id.
+ */
+export async function startFlightBrowse(
+  deps: BrowserDeps,
+  userId: string,
+  input: {
+    purpose: "checkin" | "arrival_card";
+    tripItemId: string;
+    chatId: string | null;
+    title: string;
+    /** The whole task, rules included (BROWSER_INSTRUCTIONS is not added). */
+    task: string;
+    startUrl: string | null;
+    secrets: SecretBinding[];
+    maxCostUsd: number;
+  },
+): Promise<BrowserSessionRow> {
+  const ctx = { userId, runId: null };
+  const [session] = await withUser(
+    deps.sql,
+    userId,
+    (tx) => tx<BrowserSessionRow[]>`
+      INSERT INTO browser_sessions (user_id, status, task, step, title, purpose, chat_id,
+                                    trip_item_id)
+      VALUES (${userId}, 'starting',
+              ${input.startUrl ? `${input.task}\n\nStart at: ${input.startUrl}` : input.task},
+              'Opening the browser', ${input.title}, ${input.purpose}, ${input.chatId},
+              ${input.tripItemId})
+      RETURNING *`,
+  );
+  try {
+    const { profileId, workspaceId } = await identity(deps, userId);
+    const before = Object.fromEntries(
+      (await deps.browser.listFiles(workspaceId, "outputs/", false)).map((f) => [
+        f.path,
+        f.lastModified,
+      ]),
+    );
+    const run = await deps.browser.createRun({
+      task: input.startUrl ? `${input.task}\n\nStart at: ${input.startUrl}` : input.task,
+      secrets: input.secrets,
+      workspaceId,
+      profileId,
+      maxCostUsd: input.maxCostUsd,
+      keepAlive: KEEP_ALIVE_S,
+    });
+    return (
+      (await update(
+        deps,
+        ctx,
+        session!.id,
+        {
+          status: "running",
+          bu_run_id: run.id,
+          bu_session_id: run.sessionId,
+          bu_profile_id: profileId,
+          bu_workspace_id: workspaceId,
+          outputs_before: deps.sql.json(before),
+          events_after: 0,
+        },
+        ["starting"],
+      )) ?? session!
+    );
+  } catch (err) {
+    console.error(`flight browse ${session!.id}: start failed (${(err as Error).name})`);
+    return (
+      (await update(deps, ctx, session!.id, {
+        status: "failed",
+        error: "The browser couldn't start.",
+        finished_at: new Date(),
+      })) ?? session!
+    );
+  }
+}
+
+/** Moves a flight's browser session on; returns the finished session's report, or null. */
+export async function advanceFlightBrowse(
+  deps: BrowserDeps,
+  userId: string,
+  session: BrowserSessionRow,
+): Promise<Record<string, unknown> | null> {
+  return advanceBrowse(deps, { userId, runId: null }, session, async () => null);
+}
+
+/**
  * What the browser asks of the person, as one plain sentence for the card: no markdown, and
  * web addresses shortened to their site ("github.com" rather than a long sign-in link).
  */
@@ -337,11 +435,13 @@ function readEvents(events: BuEvent[], deps: BrowserDeps) {
 /** Copies files the agent saved into outputs/ during this session into our own store. */
 async function copyOutputs(deps: BrowserDeps, ctx: BrowseContext, s: BrowserSessionRow) {
   if (!s.bu_workspace_id) return [];
-  const [run] = await withUser(
-    deps.sql,
-    ctx.userId,
-    (tx) => tx<{ chat_id: string }[]>`SELECT chat_id FROM runs WHERE id = ${ctx.runId}`,
-  );
+  const [run] = ctx.runId
+    ? await withUser(
+        deps.sql,
+        ctx.userId,
+        (tx) => tx<{ chat_id: string }[]>`SELECT chat_id FROM runs WHERE id = ${ctx.runId}`,
+      )
+    : [{ chat_id: s.chat_id }];
   const listed = await deps.browser.listFiles(s.bu_workspace_id, "outputs/", true);
   const fresh = listed
     .filter((f) => s.outputs_before[f.path] !== f.lastModified && f.size > 0)
@@ -655,7 +755,7 @@ async function owned(deps: BrowserDeps, userId: string, id: string): Promise<Bro
 /** The person takes control of the browser; the agent's run is cancelled, which pauses it. */
 export async function takeOver(deps: BrowserDeps, userId: string, id: string) {
   const s = await owned(deps, userId, id);
-  const ctx = { userId, runId: s.run_id ?? "" };
+  const ctx = { userId, runId: s.run_id };
   const now = deps.now?.() ?? new Date();
   if (s.status === "user_control") return s;
   if (s.status === "needs_user") {
@@ -685,7 +785,7 @@ export async function takeOver(deps: BrowserDeps, userId: string, id: string) {
 /** The person hands the browser back; the agent continues from the current page. */
 export async function handBack(deps: BrowserDeps, userId: string, id: string) {
   const s = await owned(deps, userId, id);
-  const ctx = { userId, runId: s.run_id ?? "" };
+  const ctx = { userId, runId: s.run_id };
   if (s.status !== "user_control" && s.status !== "needs_user") {
     throw new Conflict("The browser isn't waiting for you.");
   }
@@ -693,6 +793,7 @@ export async function handBack(deps: BrowserDeps, userId: string, id: string) {
   try {
     run = await deps.browser.createRun({
       task: "The person took over the browser and has now handed it back to you. Look at the current page first, then continue and finish the original task, following the same rules.",
+      secrets: await moreSecrets(deps, userId, s),
       sessionId: s.bu_session_id!,
       workspaceId: s.bu_workspace_id ?? undefined,
       profileId: s.bu_profile_id ?? undefined,
@@ -809,6 +910,7 @@ async function sendSignIn(
     secrets: [
       ...(login.username ? [bind("login_username", login.username)] : []),
       bind("login_password", login.password),
+      ...(await moreSecrets(deps, ctx.userId, s)),
     ],
     sessionId: s.bu_session_id!,
     workspaceId: s.bu_workspace_id ?? undefined,
@@ -909,7 +1011,7 @@ export async function signIn(
   },
 ) {
   const s = await owned(deps, userId, id);
-  const ctx = { userId, runId: s.run_id ?? "" };
+  const ctx = { userId, runId: s.run_id };
   if (s.status !== "needs_user" || !s.ask_kind || !s.ask_site) {
     throw new Conflict("The browser isn't asking for a sign-in.");
   }
@@ -972,7 +1074,10 @@ async function sendCode(
   ].join("\n");
   const run = await deps.browser.createRun({
     task,
-    secrets: [{ alias: "login_code", value: code, allowedDomains: [site] }],
+    secrets: [
+      { alias: "login_code", value: code, allowedDomains: [site] },
+      ...(await moreSecrets(deps, ctx.userId, s)),
+    ],
     sessionId: s.bu_session_id!,
     workspaceId: s.bu_workspace_id ?? undefined,
     profileId: s.bu_profile_id ?? undefined,

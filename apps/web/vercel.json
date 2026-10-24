@@ -2,5 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
   "buildCommand": "cd ../.. && pnpm --filter \"@ai-assistant/web...\" build && node scripts/migrate-on-deploy.mjs",
-  "git": { "deploymentEnabled": false }
+  "git": {
+    "deploymentEnabled": false
+  },
+  "crons": [
+    {
+      "path": "/api/cron/flights",
+      "schedule": "0 12 * * *"
+    }
+  ]
 }

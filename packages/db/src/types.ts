@@ -160,6 +160,11 @@ export interface BrowserSessionRow {
   code_site: string | null;
   /** A saved login the person asked to approve first: its account ('' for none), else null. */
   ask_saved_account: string | null;
+  /** "chat": a browse call in a reply. Otherwise a flight's check-in or arrival card. */
+  purpose: "chat" | "checkin" | "arrival_card";
+  /** For flight sessions (no reply behind them): the chat their files go to. */
+  chat_id: string | null;
+  trip_item_id: string | null;
 }
 
 export interface BrowserTab {

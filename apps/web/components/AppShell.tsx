@@ -6,6 +6,7 @@ import {
   type BrowserView,
   type ChatSummary,
   type FileView,
+  type FlightView,
   type Me,
   type MessageView,
   type RunView,
@@ -27,12 +28,17 @@ import { usePref } from "@/lib/prefs";
 import { Answer } from "./Answer";
 import { BrowserCard, BrowserPanel } from "./BrowserCard";
 import { FileChip, FileList, PaperclipIcon } from "./Files";
+import { FlightCard } from "./FlightCard";
 import { Menu, MenuItem } from "./Menu";
 import { Settings, VaultIcon, type GmailResult } from "./Settings";
 
 const POLL_MS = 1500;
 /** Replies in chats you aren't looking at keep going too, checked a little less often. */
 const BACKGROUND_POLL_MS = 3000;
+/** New messages the assistant sends by itself (trip cards, check-in news) show up this often. */
+const IDLE_POLL_MS = 60000;
+/** While a check-in or arrival card is being done, its card is refreshed this often. */
+const FLIGHT_POLL_MS = 5000;
 
 type ChatChange = { pinned?: boolean; archived?: boolean; title?: string };
 
@@ -54,6 +60,7 @@ export function AppShell({ chatId }: { chatId: string }) {
   // Chats whose reply finished while you were looking at another chat.
   const [unread, setUnread] = useState<ReadonlySet<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
+  const [sharing, setSharing] = useState<ChatSummary | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Files attached to the message being written (already uploaded).
   const [attachments, setAttachments] = useState<FileView[]>([]);
@@ -77,6 +84,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [preview, setPreview] = useState<{ id: string; takeControl: boolean } | null>(null);
   const [settings, setSettings] = useState<"home" | "vault" | "connections" | null>(null);
   const [gmailResult, setGmailResult] = useState<GmailResult | null>(null);
+  // On the day of a flight its trip card sits at the top of the Main chat.
+  const [todayFlight, setTodayFlight] = useState<FlightView | null>(null);
   // Back from Google's sign-in (connecting Gmail): open Settings where it left off.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -168,6 +177,7 @@ export function AppShell({ chatId }: { chatId: string }) {
     setAttachments([]);
     setPending(null);
     setPreview(null);
+    setTodayFlight(null);
     setDraft(drafts.get(chatId) ?? "");
     setUnread((prev) => {
       if (!prev.has(chatId)) return prev;
@@ -203,6 +213,12 @@ export function AppShell({ chatId }: { chatId: string }) {
         setSelected(lastAnswer ? { messageId: lastAnswer.id, n: null } : null);
         // A brand-new chat is ready to type in.
         if (data.messages.length === 0 && !data.activeRun) inputRef.current?.focus();
+        if (data.chat.kind === "main") {
+          api
+            .flights()
+            .then((r) => !cancelled && setTodayFlight(r.flights.find((f) => f.today) ?? null))
+            .catch(() => {});
+        }
       })
       .catch((err) => {
         if (!cancelled && !handleAuth(err))
@@ -290,6 +306,44 @@ export function AppShell({ chatId }: { chatId: string }) {
       clearTimeout(timer);
     };
   }, [backgroundRuns, handleAuth, refreshChats]);
+
+  // While nothing is being answered, look now and then for messages the assistant sent by itself
+  // (a new trip card, "You're checked in") and keep trip cards current. Faster while a check-in
+  // or arrival card is being done.
+  const flightBusy = messages.some(
+    (m) =>
+      m.flight &&
+      (m.flight.checkin.status === "running" ||
+        m.flight.arrival?.status === "running" ||
+        (m.flight.arrival?.status === "ready" && m.flight.arrival.confirmed)),
+  );
+  const isMain = chat?.kind === "main";
+  useEffect(() => {
+    if (activeRunId || pending || !chat) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      try {
+        const [data, upcoming] = await Promise.all([
+          api.getChat(chatId),
+          isMain ? api.flights() : Promise.resolve(null),
+        ]);
+        if (stopped) return;
+        // A reply someone started elsewhere (another tab) is picked up too.
+        if (data.activeRun) setActiveRun(data.activeRun);
+        setMessages(data.messages);
+        if (upcoming) setTodayFlight(upcoming.flights.find((f) => f.today) ?? null);
+      } catch (err) {
+        if (handleAuth(err)) return;
+      }
+      if (!stopped) timer = setTimeout(tick, flightBusy ? FLIGHT_POLL_MS : IDLE_POLL_MS);
+    };
+    timer = setTimeout(tick, flightBusy ? FLIGHT_POLL_MS : IDLE_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [chatId, chat, isMain, activeRunId, pending, flightBusy, handleAuth]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -501,16 +555,48 @@ export function AppShell({ chatId }: { chatId: string }) {
   }
 
   // Every browser in this chat, newest data first (the active run's is live).
+  const flightBrowsers = (f: FlightView | null | undefined) =>
+    [f?.checkin.browser, f?.arrival?.browser].filter((b): b is BrowserView => !!b);
   const allBrowsers: BrowserView[] = [
     ...(activeRun?.browsers ?? []),
     ...endedRuns.flatMap((r) => r.browsers),
     ...messages.flatMap((m) => m.browsers),
+    ...flightBrowsers(todayFlight),
+    ...messages.flatMap((m) => flightBrowsers(m.flight)),
   ];
   const previewBrowser = preview ? allBrowsers.find((b) => b.id === preview.id) : undefined;
 
   function updateBrowser(view: BrowserView) {
     setActiveRun((run) =>
       run ? { ...run, browsers: run.browsers.map((b) => (b.id === view.id ? view : b)) } : run,
+    );
+    // A check-in's browser lives on its trip card.
+    const inFlight = (f: FlightView): FlightView => ({
+      ...f,
+      checkin: f.checkin.browser?.id === view.id ? { ...f.checkin, browser: view } : f.checkin,
+      arrival:
+        f.arrival && f.arrival.browser?.id === view.id
+          ? { ...f.arrival, browser: view }
+          : f.arrival,
+    });
+    setMessages((prev) => prev.map((m) => (m.flight ? { ...m, flight: inFlight(m.flight) } : m)));
+    setTodayFlight((f) => (f ? inFlight(f) : f));
+  }
+
+  function updateFlight(view: FlightView) {
+    setMessages((prev) => prev.map((m) => (m.flight?.id === view.id ? { ...m, flight: view } : m)));
+    setTodayFlight((f) => (f?.id === view.id ? view : f));
+  }
+
+  function flightCard(f: FlightView, pinned = false) {
+    return (
+      <FlightCard
+        key={`${pinned ? "pin" : "msg"}-${f.id}`}
+        flight={f}
+        pinned={pinned}
+        onChange={updateFlight}
+        browserCard={(b) => browserCards([b])}
+      />
     );
   }
 
@@ -679,6 +765,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                   current={chatId}
                   unread={unread.has(mainChat.id)}
                   onPick={picked}
+                  onShare={setSharing}
                 />
               </li>
             )}
@@ -705,6 +792,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                   onPick={picked}
                   onUpdate={updateChat}
                   onDelete={setConfirmDelete}
+                  onShare={setSharing}
                 />
               </li>
             ))}
@@ -772,6 +860,7 @@ export function AppShell({ chatId }: { chatId: string }) {
               Couldn&apos;t open this chat: {loadError}
             </p>
           )}
+          {todayFlight && <div className="today-pin">{flightCard(todayFlight, true)}</div>}
           {isEmpty && !loadError && chat && (
             <div className="empty">
               <h2>What would you like to know?</h2>
@@ -804,6 +893,8 @@ export function AppShell({ chatId }: { chatId: string }) {
                     />
                   )}
                 </article>
+                {/* On the day the card is pinned at the top instead. */}
+                {m.flight && m.flight.id !== todayFlight?.id && flightCard(m.flight)}
                 {ended && browserCards(ended.browsers)}
                 {ended && (
                   <p
@@ -937,6 +1028,7 @@ export function AppShell({ chatId }: { chatId: string }) {
           This deletes the side chat and all of its messages. It can&apos;t be undone.
         </ConfirmDialog>
       )}
+      {sharing && <ShareDialog chat={sharing} onClose={() => setSharing(null)} />}
       {settings && (
         <Settings
           start={settings}
@@ -960,6 +1052,62 @@ export function AppShell({ chatId }: { chatId: string }) {
   );
 }
 
+/** Makes a read-only link to the chat and copies it, after saying what the link shows. */
+function ShareDialog({ chat, onClose }: { chat: ChatSummary; onClose: () => void }) {
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function share() {
+    setError(null);
+    try {
+      const { path } = await api.shareChat(chat.id);
+      const url = `${window.location.origin}${path}`;
+      setLink(url);
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+      } catch {
+        // Some browsers refuse; the link is shown to copy by hand.
+      }
+    } catch {
+      setError("Couldn't make the link. Try again.");
+    }
+  }
+  return (
+    <ConfirmDialog
+      title={`Share "${chatName(chat)}"`}
+      confirmLabel={link ? "Done" : "Copy link"}
+      onConfirm={link ? onClose : () => void share()}
+      onCancel={onClose}
+      safe
+    >
+      {link ? (
+        <>
+          {copied ? "Link copied. " : ""}Anyone with this link can read this chat for 30 days.
+          <input
+            className="share-link"
+            readOnly
+            value={link}
+            aria-label="Share link"
+            onFocus={(e) => e.target.select()}
+          />
+        </>
+      ) : (
+        <>
+          Anyone with the link can read this chat for 30 days, including what you send after
+          sharing. Passport, ID and booking numbers are hidden, and your files and saved details
+          aren&apos;t shared.
+        </>
+      )}
+      {error && (
+        <span className="form-error share-error" role="alert">
+          {error}
+        </span>
+      )}
+    </ConfirmDialog>
+  );
+}
+
 function chatName(chat: ChatSummary) {
   return chat.kind === "main" ? "Main chat" : chat.title || "New side chat";
 }
@@ -971,6 +1119,7 @@ function ChatLink({
   onPick,
   onUpdate,
   onDelete,
+  onShare,
 }: {
   chat: ChatSummary;
   current: string;
@@ -978,6 +1127,7 @@ function ChatLink({
   onPick: () => void;
   onUpdate?: (id: string, change: ChatChange) => void;
   onDelete?: (chat: ChatSummary) => void;
+  onShare?: (chat: ChatSummary) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const isCurrent = chat.id === current;
@@ -1022,37 +1172,52 @@ function ChatLink({
           )
         )}
       </Link>
-      {onUpdate && (
+      {(onUpdate || onShare) && (
         <Menu label={`Options for ${name}`} trigger={<MoreIcon />} className="row-menu">
           {(close) => (
             <>
-              <MenuItem
-                icon={<PinIcon />}
-                onSelect={() => {
-                  onUpdate(chat.id, { pinned: !chat.pinned });
-                  close();
-                }}
-              >
-                {chat.pinned ? "Unpin" : "Pin"}
-              </MenuItem>
-              <MenuItem
-                icon={<PencilIcon />}
-                onSelect={() => {
-                  setRenaming(true);
-                  close();
-                }}
-              >
-                Rename
-              </MenuItem>
-              <MenuItem
-                icon={<ArchiveIcon />}
-                onSelect={() => {
-                  onUpdate(chat.id, { archived: !chat.archived });
-                  close();
-                }}
-              >
-                {chat.archived ? "Unarchive" : "Archive"}
-              </MenuItem>
+              {onShare && (
+                <MenuItem
+                  icon={<ShareIcon />}
+                  onSelect={() => {
+                    onShare(chat);
+                    close();
+                  }}
+                >
+                  Share
+                </MenuItem>
+              )}
+              {onUpdate && (
+                <>
+                  <MenuItem
+                    icon={<PinIcon />}
+                    onSelect={() => {
+                      onUpdate(chat.id, { pinned: !chat.pinned });
+                      close();
+                    }}
+                  >
+                    {chat.pinned ? "Unpin" : "Pin"}
+                  </MenuItem>
+                  <MenuItem
+                    icon={<PencilIcon />}
+                    onSelect={() => {
+                      setRenaming(true);
+                      close();
+                    }}
+                  >
+                    Rename
+                  </MenuItem>
+                  <MenuItem
+                    icon={<ArchiveIcon />}
+                    onSelect={() => {
+                      onUpdate(chat.id, { archived: !chat.archived });
+                      close();
+                    }}
+                  >
+                    {chat.archived ? "Unarchive" : "Archive"}
+                  </MenuItem>
+                </>
+              )}
               {onDelete && (
                 <>
                   <hr className="menu-divider" />
@@ -1120,12 +1285,15 @@ function ConfirmDialog({
   onConfirm,
   onCancel,
   children,
+  safe = false,
 }: {
   title: string;
   confirmLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
   children: ReactNode;
+  /** The action isn't destructive: a plain button instead of a red one. */
+  safe?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -1151,7 +1319,11 @@ function ConfirmDialog({
         <button className="btn btn-ghost" type="button" onClick={onCancel} autoFocus>
           Cancel
         </button>
-        <button className="btn btn-danger" type="button" onClick={onConfirm}>
+        <button
+          className={`btn ${safe ? "btn-primary" : "btn-danger"}`}
+          type="button"
+          onClick={onConfirm}
+        >
           {confirmLabel}
         </button>
       </div>
@@ -1253,6 +1425,22 @@ const COMING_SOON = [
   { label: "Goals", Icon: GoalsIcon },
   { label: "Library", Icon: LibraryIcon },
 ];
+const ShareIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    width="16"
+    height="16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 3v12M7 8l5-5 5 5M5 14v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" />
+  </svg>
+);
+
 const ArchiveIcon = () => (
   <Icon d="M4 5h16v4H4V5Zm1 4v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4" />
 );

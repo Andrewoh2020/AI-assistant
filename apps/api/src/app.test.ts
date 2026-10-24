@@ -644,6 +644,102 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(denied.error).toBe("No file with that file_id.");
   });
 
+  it("shares a chat read-only, with ID-style numbers hidden", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    travila.scripts.push([{ answer: "Please use the trip card, not the chat." }]);
+    const sent = await ask(a, chat, "Ann Lee, passport 549957786, flight QR 4791 on 23 Oct");
+    await pollUntilDone(a, sent.json().run.id);
+
+    // Only the owner can make a link.
+    const b = await signUp();
+    const theirs = await app.inject({
+      method: "POST",
+      url: `/chats/${chat}/share`,
+      headers: { cookie: b },
+    });
+    expect(theirs.statusCode).toBe(403);
+    const made = await app.inject({
+      method: "POST",
+      url: `/chats/${chat}/share`,
+      headers: { cookie: a },
+    });
+    expect(made.statusCode).toBe(200);
+    const path = made.json().path as string;
+    expect(path).toMatch(/^\/share\/[\w-]+\.[\w-]+$/);
+
+    // Anyone with it can read, signed in or not; the passport number isn't in it.
+    const res = await app.inject({ method: "GET", url: path });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain("549957786");
+    const shared = res.json().chat;
+    expect(shared.title).toBe("Main chat");
+    expect(shared.messages.map((m: { text: string }) => m.text)).toEqual([
+      "Ann Lee, passport •••, flight QR 4791 on 23 Oct",
+      "Please use the trip card, not the chat.",
+    ]);
+
+    // A changed link doesn't open anything.
+    const forged = path.slice(0, -2) + (path.endsWith("A") ? "B" : "A") + path.slice(-1);
+    expect((await app.inject({ method: "GET", url: forged })).statusCode).toBe(404);
+  });
+
+  it("saves a flight given in chat, keeping details when it's saved twice", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    const leg = {
+      airline: "AirAsia",
+      flight_number: "AK706",
+      from_code: "SIN",
+      to_code: "KUL",
+      depart_at: "2030-10-25T12:10",
+    };
+    travila.scripts.push([
+      {
+        tools: [
+          { name: "save_flight", args: { ...leg, confirmation: "QX7P2M" } },
+          { name: "save_flight", args: { ...leg, arrive_at: "2030-10-25T13:15" } },
+        ],
+      },
+      { answer: "Saved. I'll check you in when check-in opens." },
+    ]);
+    const sent = await ask(a, chat, "Check me in: AK706 SIN to KUL, 25 Oct 2030 12:10, ref QX7P2M");
+    expect((await pollUntilDone(a, sent.json().run.id)).status).toBe("completed");
+    // The two calls run at the same time; one adds the flight and the other updates it.
+    const results = travila.submitted.at(-1)!.results.map((r) => r.resultJson as { saved: string });
+    expect(results.map((r) => r.saved).sort()).toEqual(["added", "updated"]);
+    const [item] = await sql!<{ confirmation_ref: string; details: Record<string, string> }[]>`
+      SELECT t.confirmation_ref, t.details FROM trip_items t JOIN chats c ON c.user_id = t.user_id
+      WHERE c.id = ${chat}`;
+    expect(item).toMatchObject({
+      confirmation_ref: "QX7P2M",
+      details: { flightNumber: "AK 706", arriveAt: "2030-10-25T13:15" },
+    });
+
+    // A save missing what check-in needs says so plainly.
+    travila.scripts.push([
+      { tools: [{ name: "save_flight", args: { to_code: "KUL" } }] },
+      { answer: "I couldn't save it." },
+    ]);
+    const bad = await ask(a, chat, "AK706 to KL");
+    await pollUntilDone(a, bad.json().run.id);
+    const error = (travila.submitted.at(-1)!.results[0]!.resultJson as { error: string }).error;
+    expect(error).toMatch(/^Not saved: .*tell the user it wasn't saved/);
+  });
+
+  it("shows an attached screenshot to the model", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    const file = (await upload(a, "Booking.png", "image/png", png)).json().file;
+    travila.scripts.push([{ answer: "It's AirAsia AK 706." }]);
+    const sent = await ask(a, chat, "What flight is this?", undefined, [file.id]);
+    await pollUntilDone(a, sent.json().run.id);
+    expect(travila.images.at(-1)).toEqual([{ mime: "image/png", base64: png.toString("base64") }]);
+    const thread = [...travila.threads.values()].at(-1)!;
+    expect(thread.history[0]!.content![0]!.content).toContain("look at it directly");
+  });
+
   it("takes an uploaded PDF to the browser and keeps the original and the browser's file downloadable", async () => {
     const a = await signUp();
     const b = await signUp();

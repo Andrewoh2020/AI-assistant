@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import cookie from "@fastify/cookie";
 import { withUser, type ChatRow, type Sql } from "@ai-assistant/db";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
@@ -13,6 +14,7 @@ import type { BrowserUse } from "./browseruse.js";
 import type { Config } from "./config.js";
 import { BadRequest } from "./errors.js";
 import { cleanFileName, fileView, MAX_FILE_BYTES, readFile, saveFile } from "./files.js";
+import { readShareToken, sharedChat, shareToken } from "./share.js";
 import { extractText } from "./extract.js";
 import { DeepSeekBookingReader, type BookingReader } from "./bookings.js";
 import {
@@ -26,6 +28,33 @@ import {
   type GmailDeps,
 } from "./gmail.js";
 import { GoogleAuthError, TravilaGmail, type Google } from "./google.js";
+import {
+  FlightAwareHttp,
+  GoogleRoutesHttp,
+  type FlightStatusSource,
+  type RouteSource,
+} from "./flightdata.js";
+import {
+  afterPrep,
+  flightSecrets,
+  flightViews,
+  planFlights,
+  planOf,
+  stepFlight,
+  tickAll,
+  tickUser,
+  upcomingFlightIds,
+  airlineOf,
+  type FlightDeps,
+} from "./flights.js";
+import {
+  checkPrep,
+  editProfile,
+  profileView,
+  readProfile,
+  revealDocuments,
+  savePrep,
+} from "./travel.js";
 import {
   advanceRun,
   Conflict,
@@ -75,6 +104,16 @@ export interface AppDeps {
   google?: Google;
   /** Reads bookings out of emails; DeepSeek when left out. */
   bookingReader?: BookingReader;
+  /** Live flight status and travel times; built from the config when left out. */
+  flightStatus?: FlightStatusSource;
+  routes?: RouteSource;
+  /**
+   * Runs the flight scheduler in this process: it sleeps until a flight next needs something, and
+   * wakes at least this often to look for new booking emails. Set on a computer that stays on;
+   * left out on Vercel, where /cron/flights and opening the app drive it.
+   */
+  scheduleEveryMs?: number;
+  now?: () => Date;
 }
 
 declare module "fastify" {
@@ -119,6 +158,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       deps.bookingReader ?? new DeepSeekBookingReader(config.deepseekBase, config.deepseekKey),
     vaultKey,
     secret: config.sessionSecret,
+  };
+  const flightDeps: FlightDeps = {
+    sql,
+    browser: deps.browser,
+    secret: config.sessionSecret,
+    vaultKey,
+    status: deps.flightStatus ?? new FlightAwareHttp(config.flightAwareKey),
+    routes: deps.routes ?? new GoogleRoutesHttp(config.googleMapsKey),
+    now: deps.now,
+    checkGapMs: deps.browserCheckGapMs,
   };
   // Work that carries on after the response (on Vercel, waitUntil keeps the function alive).
   const later = (work: Promise<unknown>) => {
@@ -268,8 +317,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.get("/chats", async (req, reply) => {
     const s = requireSession(req, reply);
     if (!s) return;
-    // Opening the app is when new booking emails are looked for (at most every 15 minutes).
-    later(syncIfDue(gmailDeps, s.userId));
+    // Opening the app is when new booking emails are looked for (at most every 15 minutes), and
+    // when this person's flights get looked at if nothing else is running the scheduler.
+    later(syncIfDue(gmailDeps, s.userId).then(() => tickUser(flightDeps, s.userId)));
     return { chats: (await listChats(sql, s)).map(chatSummary) };
   });
 
@@ -322,6 +372,28 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       req.params.id,
     );
     return { chat: chatSummary(chat), messages, activeRun, endedRuns };
+  });
+
+  // Share links: the owner makes one; anyone with it can read the chat (numbers hidden).
+  app.post<{ Params: { id: string } }>("/chats/:id/share", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("chat");
+    const { chat } = await getChat(orchestratorDeps, s, req.params.id);
+    const { token, expiresAt } = shareToken(chat.id, s.userId, config.sessionSecret);
+    return { path: `/share/${token}`, expiresAt: expiresAt.toISOString() };
+  });
+
+  app.get<{ Params: { token: string } }>("/share/:token", async (req, reply) => {
+    reply.header("Cache-Control", "no-store").header("X-Robots-Tag", "noindex");
+    const claims = readShareToken(req.params.token, config.sessionSecret);
+    if (!claims || !UUID.test(claims.chatId)) {
+      return reply.code(404).send({ error: "This link doesn't work any more. Ask for a new one." });
+    }
+    const owner = { userId: claims.userId, travilaUserId: "", timezone: "UTC" };
+    const { chat, messages } = await getChat(orchestratorDeps, owner, claims.chatId);
+    const title = chat.kind === "main" ? "Main chat" : (chat.title ?? "Side chat");
+    return { chat: sharedChat(title, messages, claims.expiresAt) };
   });
 
   app.post<{ Params: { id: string } }>("/chats/:id/messages", async (req, reply) => {
@@ -452,6 +524,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     secret: config.sessionSecret,
     checkGapMs: deps.browserCheckGapMs,
     vaultKey,
+    // A check-in that is handed back or signed in to keeps its passport details.
+    extraSecrets: flightSecrets(flightDeps),
   });
 
   app.post<{ Params: { id: string } }>("/browser-sessions/:id/take-over", async (req, reply) => {
@@ -781,7 +855,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         if (!(err instanceof GoogleAuthError)) app.log.error(err);
         return backToSettings(s, reply, err instanceof GoogleAuthError ? "cancelled" : "failed");
       }
-      later(syncGmail(gmailDeps, s.userId));
+      later(syncGmail(gmailDeps, s.userId).then(() => planFlights(flightDeps, s.userId)));
       return backToSettings(s, reply, "connected");
     },
   );
@@ -792,6 +866,244 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     await disconnectGmail(gmailDeps, s.userId, s.travilaUserId);
     return { ok: true };
   });
+
+  // Flights ---------------------------------------------------------------------------
+  // Trip cards: check-in, arrival cards, live status and time to leave. Plan:
+  // /mnt/project-files/design/checkin-plan.html.
+
+  const today = () => (deps.now?.() ?? new Date()).toISOString().slice(0, 10);
+  const flightView = async (userId: string, id: string) => {
+    const view = (
+      await flightViews(sql, userId, [id], config.sessionSecret, {
+        liveAvailable: flightDeps.status.available,
+        now: deps.now?.(),
+      })
+    ).get(id);
+    if (!view) throw new NotFound("flight");
+    return view;
+  };
+
+  app.get("/flights", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    reply.header("Cache-Control", "no-store");
+    later(tickUser(flightDeps, s.userId));
+    const ids = await upcomingFlightIds(sql, s.userId);
+    const views = await flightViews(sql, s.userId, ids, config.sessionSecret, {
+      liveAvailable: flightDeps.status.available,
+      now: deps.now?.(),
+    });
+    return { flights: ids.map((id) => views.get(id)).filter(Boolean) };
+  });
+
+  app.get<{ Params: { id: string } }>("/flights/:id", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    if (!UUID.test(req.params.id)) throw new NotFound("flight");
+    reply.header("Cache-Control", "no-store");
+    // A card being watched moves its check-in along (the browser is looked at now and then).
+    const plan = await planOf(sql, s.userId, req.params.id);
+    if (!plan) throw new NotFound("flight");
+    const now = deps.now?.() ?? new Date();
+    if (plan.next_due_at && new Date(plan.next_due_at) <= now) {
+      later(stepFlight(flightDeps, s.userId, req.params.id));
+    }
+    return { flight: await flightView(s.userId, req.params.id) };
+  });
+
+  const str = (max: number) => ({ type: "string", maxLength: max });
+  const nullableStr = (max: number) => ({ type: ["string", "null"], maxLength: max });
+  const prepProps = {
+    firstName: str(60),
+    middleName: str(60),
+    lastName: str(60),
+    dateOfBirth: str(10),
+    gender: { type: "string", enum: ["female", "male", "x"] },
+    nationality: str(2),
+    passportNumber: str(30),
+    passportExpiry: str(10),
+    passportCountry: str(2),
+    knownTravelerNumber: nullableStr(30),
+    frequentFlyerNumber: nullableStr(40),
+    seatSide: { type: "string", enum: ["window", "aisle", "any"] },
+    seatZone: { type: "string", enum: ["front", "middle", "back", "any"] },
+    seatEmptyNearby: { type: "boolean" },
+    seatAvoidWashroom: { type: "boolean" },
+    homeAddress: str(300),
+    answer: str(500),
+  };
+
+  // The Trip prep card. The body can hold a passport number: it goes straight into the vault and
+  // is never logged or sent back.
+  app.post<{ Params: { id: string }; Body: Record<string, unknown> }>(
+    "/flights/:id/prep",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: { ...prepProps, noBannedItems: { type: "boolean" } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("flight");
+      const plan = await planOf(sql, s.userId, req.params.id);
+      if (!plan || plan.details.kind !== "flight") throw new NotFound("flight");
+      const { noBannedItems, ...input } = (req.body ?? {}) as Record<string, unknown> & {
+        noBannedItems?: boolean;
+      };
+      checkPrep(input, today());
+      const question = plan.checkin_question ?? plan.arrival_question;
+      await savePrep(sql, vaultKey, s.userId, input, {
+        airline: airlineOf(plan.details),
+        question,
+      });
+      await afterPrep(flightDeps, s.userId, req.params.id, {
+        noBannedItems,
+        answered: typeof input.answer === "string" && !!input.answer.trim(),
+      });
+      later(stepFlight(flightDeps, s.userId, req.params.id));
+      reply.header("Cache-Control", "no-store");
+      return { flight: await flightView(s.userId, req.params.id) };
+    },
+  );
+
+  app.patch<{
+    Params: { id: string };
+    Body: { autoCheckin?: boolean; arrivalConfirmed?: boolean };
+  }>(
+    "/flights/:id",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: { autoCheckin: { type: "boolean" }, arrivalConfirmed: { type: "boolean" } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      if (!UUID.test(req.params.id)) throw new NotFound("flight");
+      const plan = await planOf(sql, s.userId, req.params.id);
+      if (!plan) throw new NotFound("flight");
+      await afterPrep(flightDeps, s.userId, req.params.id, req.body ?? {});
+      later(stepFlight(flightDeps, s.userId, req.params.id));
+      return { flight: await flightView(s.userId, req.params.id) };
+    },
+  );
+
+  app.get("/travel-profile", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    reply.header("Cache-Control", "no-store");
+    return { profile: profileView(await readProfile(sql, s.userId)) };
+  });
+
+  app.patch<{ Body: Record<string, unknown> }>(
+    "/travel-profile",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ...prepProps,
+            knownTravelerNumber: nullableStr(30),
+            frequentFlyer: {
+              type: "object",
+              maxProperties: 5,
+              additionalProperties: { type: ["string", "null"], maxLength: 40 },
+              propertyNames: { pattern: "^[A-Z0-9]{2}$" },
+            },
+            removeAnswer: str(200),
+          },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      reply.header("Cache-Control", "no-store");
+      const profile = await editProfile(sql, vaultKey, s.userId, req.body ?? {}, today());
+      // A detail added in Settings can unblock a flight that was waiting for it.
+      for (const id of await upcomingFlightIds(sql, s.userId)) {
+        await afterPrep(flightDeps, s.userId, id, {});
+      }
+      return { profile };
+    },
+  );
+
+  app.post("/travel-profile/reveal", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    reply.header("Cache-Control", "no-store");
+    return { documents: await revealDocuments(sql, vaultKey, s.userId) };
+  });
+
+  // The scheduler: every flight that is due, for everyone, plus new booking emails.
+  let ticking = false;
+  const tick = async () => {
+    if (ticking) return;
+    ticking = true;
+    try {
+      const users = await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(
+        () => [],
+      );
+      for (const u of users) {
+        await syncIfDue(gmailDeps, u.user_id);
+        await planFlights(flightDeps, u.user_id).catch((err) => app.log.error(err));
+      }
+      await tickAll(flightDeps);
+    } finally {
+      ticking = false;
+    }
+  };
+
+  // Vercel Cron calls this with "Authorization: Bearer <CRON_SECRET>".
+  app.get("/cron/flights", async (req, reply) => {
+    const want = Buffer.from(`Bearer ${config.cronSecret}`);
+    const got = Buffer.from(String(req.headers.authorization ?? ""));
+    if (!config.cronSecret || got.length !== want.length || !timingSafeEqual(got, want)) {
+      return reply.code(401).send({ error: "Not allowed." });
+    }
+    await tick();
+    return { ok: true };
+  });
+
+  // On a computer that stays on: wake when the next flight needs something, and at least every
+  // `scheduleEveryMs` to look for new booking emails. A wake-up with nothing due costs nothing.
+  if (deps.scheduleEveryMs) {
+    const most = deps.scheduleEveryMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    const arm = async () => {
+      if (closed) return;
+      let wait = most;
+      try {
+        const [row] = await sql<{ at: Date | null }[]>`SELECT app_next_flight_due() AS at`;
+        const now = (deps.now?.() ?? new Date()).getTime();
+        if (row?.at) wait = Math.min(most, Math.max(5000, new Date(row.at).getTime() - now));
+      } catch (err) {
+        app.log.error(err);
+      }
+      timer = setTimeout(() => {
+        void tick()
+          .catch((err) => app.log.error(err))
+          .finally(() => void arm());
+      }, wait);
+      timer.unref();
+    };
+    void arm();
+    app.addHook("onClose", async () => {
+      closed = true;
+      clearTimeout(timer);
+    });
+  }
 
   return app;
 }

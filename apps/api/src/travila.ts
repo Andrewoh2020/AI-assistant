@@ -6,7 +6,12 @@ export interface Travila {
   createThread(userId: string, input: CreateThreadInput): Promise<string>;
   /** Replaces a thread's model, instructions and tools (used when they change after it was made). */
   updateThreadConfig(userId: string, threadId: string, input: CreateThreadInput): Promise<void>;
-  sendMessage(userId: string, threadId: string, text: string): Promise<string>;
+  sendMessage(
+    userId: string,
+    threadId: string,
+    text: string,
+    images?: InlineImage[],
+  ): Promise<string>;
   getState(userId: string, threadId: string): Promise<TravilaState>;
   listPendingClientTools(userId: string, threadId: string): Promise<TravilaToolCall[]>;
   submitClientToolResults(
@@ -22,6 +27,12 @@ export interface Travila {
   ): Promise<{ id: string; memory: string }[]>;
 }
 
+/** A picture sent with the message for the model to look at (base64 bytes). */
+export interface InlineImage {
+  mime: string;
+  base64: string;
+}
+
 export interface CreateThreadInput {
   title: string;
   systemPrompt: string;
@@ -34,9 +45,16 @@ export interface CreateThreadInput {
   clientToolTimeoutMs: number;
 }
 
+/**
+ * Providers tried first for the DeepSeek model (a preference: Travila still falls back to others).
+ * Unpinned, replies took 3-18 s; with these first, about 1-3 s (measured 2026-10-22).
+ */
+const PREFERRED_PROVIDERS = ["together", "baseten", "venice/fp8"];
+
 function generationConfig(input: CreateThreadInput) {
   return {
     models: input.models,
+    provider: { order: PREFERRED_PROVIDERS },
     systemPrompt: input.systemPrompt,
     reasoning: { effort: input.reasoningEffort, exclude: false },
     clientTools: input.clientTools,
@@ -116,7 +134,12 @@ export class TravilaHttp implements Travila {
     });
   }
 
-  async sendMessage(userId: string, threadId: string, text: string): Promise<string> {
+  async sendMessage(
+    userId: string,
+    threadId: string,
+    text: string,
+    images: InlineImage[] = [],
+  ): Promise<string> {
     // Never retried automatically: a lost response doesn't mean the message wasn't accepted.
     const res = await this.call<{ runId: string }>(
       userId,
@@ -125,7 +148,14 @@ export class TravilaHttp implements Travila {
         conversationKey: threadId,
         userMessage: {
           role: "ROLE_USER",
-          content: [{ type: "CONTENT_PART_TYPE_TEXT", content: text }],
+          content: [
+            { type: "CONTENT_PART_TYPE_TEXT", content: text },
+            ...images.map((img) => ({
+              type: "CONTENT_PART_TYPE_IMAGE_BASE64",
+              content: img.base64,
+              metadata: { mimeType: img.mime },
+            })),
+          ],
         },
       },
       0,

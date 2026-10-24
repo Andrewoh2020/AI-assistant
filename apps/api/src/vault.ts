@@ -659,3 +659,143 @@ export async function deleteAccountToken(
     (tx) => tx`DELETE FROM vault.connected_accounts WHERE provider = ${provider}`,
   );
 }
+
+// Travel documents ------------------------------------------------------------------------------
+// Passport, Known Traveler and frequent flyer numbers for check-in and arrival cards. Sealed the
+// same way as saved logins. The assistant never sees them: they reach a browser run as hidden
+// values typed into the airline's or government's own site, and the person sees them in Settings.
+
+export interface TravelDocuments {
+  passportNumber?: string;
+  knownTravelerNumber?: string;
+  /** By airline code, like { UA: "AB123456" }. */
+  frequentFlyer?: Record<string, string>;
+}
+
+const travelContext = (userId: string) => `vault:v1:travel:${userId}`;
+
+interface TravelRow {
+  sealed: Buffer;
+  wrapped_key: Buffer;
+  key_id: string;
+}
+
+function openTravel(vk: VaultKey, userId: string, row: TravelRow | undefined): TravelDocuments {
+  if (!row || row.key_id !== vk.id) return {};
+  const aad = travelContext(userId);
+  try {
+    const dataKey = decrypt(vk.key, `wrap:${aad}`, row.wrapped_key);
+    try {
+      return JSON.parse(decrypt(dataKey, aad, row.sealed).toString("utf8")) as TravelDocuments;
+    } finally {
+      dataKey.fill(0);
+    }
+  } catch {
+    return {};
+  }
+}
+
+/** Which documents are saved, as "passport", "known_traveler" and "ff:UA" (never the numbers). */
+export function documentKinds(d: TravelDocuments): string[] {
+  const kinds: string[] = [];
+  if (d.passportNumber) kinds.push("passport");
+  if (d.knownTravelerNumber) kinds.push("known_traveler");
+  for (const [airline, n] of Object.entries(d.frequentFlyer ?? {}))
+    if (n) kinds.push(`ff:${airline}`);
+  return kinds;
+}
+
+/**
+ * Changes some travel documents (null removes one) and returns which are now saved. Logged as
+ * "saved" or "edited", without the numbers.
+ */
+export async function saveTravelDocuments(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  change: {
+    passportNumber?: string | null;
+    knownTravelerNumber?: string | null;
+    frequentFlyer?: Record<string, string | null>;
+  },
+  how: "saved" | "edited" = "saved",
+): Promise<string[]> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<TravelRow[]>`
+      SELECT sealed, wrapped_key, key_id FROM vault.travel_documents FOR UPDATE`;
+    const docs = openTravel(vk, userId, row);
+    const before = documentKinds(docs).join(",");
+    const set = <K extends "passportNumber" | "knownTravelerNumber">(
+      k: K,
+      v: string | null | undefined,
+    ) => {
+      if (v === undefined) return;
+      if (v === null || !v.trim()) delete docs[k];
+      else docs[k] = v.trim();
+    };
+    set("passportNumber", change.passportNumber);
+    set("knownTravelerNumber", change.knownTravelerNumber);
+    for (const [airline, n] of Object.entries(change.frequentFlyer ?? {})) {
+      docs.frequentFlyer ??= {};
+      if (n === null || !n.trim()) delete docs.frequentFlyer[airline];
+      else docs.frequentFlyer[airline] = n.trim();
+    }
+    const kinds = documentKinds(docs);
+    const aad = travelContext(userId);
+    const dataKey = randomBytes(32);
+    try {
+      const sealed = encrypt(dataKey, aad, Buffer.from(JSON.stringify(docs)));
+      const wrapped = encrypt(vk.key, `wrap:${aad}`, dataKey);
+      await tx`
+        INSERT INTO vault.travel_documents (user_id, sealed, wrapped_key, key_id)
+        VALUES (${userId}, ${sealed}, ${wrapped}, ${vk.id})
+        ON CONFLICT (user_id) DO UPDATE
+          SET sealed = EXCLUDED.sealed, wrapped_key = EXCLUDED.wrapped_key,
+              key_id = EXCLUDED.key_id, updated_at = now()`;
+    } finally {
+      dataKey.fill(0);
+    }
+    if (kinds.join(",") !== before || how === "edited") {
+      await audit(tx, userId, how, "Travel documents", null, null, kinds.join(", ") || "none");
+    }
+    return kinds;
+  });
+}
+
+/**
+ * The travel documents for one browser run (a check-in or an arrival card). The caller passes
+ * them straight to Browser Use as hidden values and drops them.
+ */
+export async function travelDocumentsForRun(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+  browserSessionId: string | null,
+): Promise<TravelDocuments> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<
+      TravelRow[]
+    >`SELECT sealed, wrapped_key, key_id FROM vault.travel_documents`;
+    const docs = openTravel(vk, userId, row);
+    if (documentKinds(docs).length) {
+      await audit(tx, userId, "used", "Travel documents", null, browserSessionId);
+    }
+    return docs;
+  });
+}
+
+/** The person's own travel documents, for Settings. Logged as "viewed". */
+export async function revealTravelDocuments(
+  sql: Sql,
+  vk: VaultKey,
+  userId: string,
+): Promise<TravelDocuments> {
+  return withVault(sql, userId, async (tx) => {
+    const [row] = await tx<
+      TravelRow[]
+    >`SELECT sealed, wrapped_key, key_id FROM vault.travel_documents`;
+    const docs = openTravel(vk, userId, row);
+    await audit(tx, userId, "viewed", "Travel documents", null, null);
+    return docs;
+  });
+}

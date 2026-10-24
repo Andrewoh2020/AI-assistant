@@ -85,9 +85,30 @@ export interface MessageView {
   files: FileView[];
   /** Browser jobs behind this answer, shown as cards above it. */
   browsers: BrowserView[];
+  /** A trip card for a flight, shown under the text (live: it changes as the flight nears). */
+  flight: FlightView | null;
   createdAt: string;
   runId: string | null;
   clientMessageId: string | null;
+}
+
+/** A message as a share link shows it: ID-style numbers hidden, files and cards as one line. */
+export interface SharedMessage extends MessageView {
+  shared: {
+    /** Names of attached or downloaded files (the files themselves aren't shared). */
+    files: string[];
+    /** Browser jobs behind the answer: "title: status". */
+    browsers: string[];
+    /** The trip card's state in a sentence. */
+    flight: string | null;
+  };
+}
+
+export interface SharedChat {
+  title: string;
+  /** When the link stops working. */
+  expiresAt: string;
+  messages: SharedMessage[];
 }
 
 export interface RunView {
@@ -226,6 +247,179 @@ export interface GmailStatus {
   trips: TripView[];
 }
 
+/** Something a flight may need from the person before check-in. Asked once, then kept. */
+export type PrepKey =
+  | "name"
+  | "dateOfBirth"
+  | "gender"
+  | "nationality"
+  | "passportNumber"
+  | "passportExpiry"
+  | "knownTraveler"
+  | "frequentFlyer"
+  | "seatStyle"
+  | "homeAddress";
+
+/** The person's travel details, as Settings shows them. Hidden numbers are only flagged. */
+export interface TravelProfileView {
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  /** "1990-04-12" */
+  dateOfBirth: string | null;
+  gender: "female" | "male" | "x" | null;
+  /** ISO country code, like "US". */
+  nationality: string | null;
+  passportCountry: string | null;
+  passportExpiry: string | null;
+  homeAddress: string | null;
+  seatSide: "window" | "aisle" | "any" | null;
+  seatZone: "front" | "middle" | "back" | "any" | null;
+  seatEmptyNearby: boolean | null;
+  seatAvoidWashroom: boolean | null;
+  hasPassportNumber: boolean;
+  hasKnownTraveler: boolean;
+  /** Airline codes with a saved frequent flyer number, like ["UA"]. */
+  frequentFlyerAirlines: string[];
+  /** Answers given to questions airlines or arrival forms asked. */
+  answers: { question: string; answer: string }[];
+}
+
+/** The hidden travel numbers, for the person's own eyes in Settings. */
+export interface TravelDocumentsView {
+  passportNumber?: string;
+  knownTravelerNumber?: string;
+  frequentFlyer?: Record<string, string>;
+}
+
+/** Answers from the Trip prep card. Every field is optional. */
+export interface PrepAnswers {
+  firstName?: string;
+  middleName?: string;
+  lastName?: string;
+  dateOfBirth?: string;
+  gender?: "female" | "male" | "x";
+  nationality?: string;
+  passportNumber?: string;
+  passportExpiry?: string;
+  passportCountry?: string;
+  /** Empty or null: "I don't have one". */
+  knownTravelerNumber?: string | null;
+  frequentFlyerNumber?: string | null;
+  seatSide?: "window" | "aisle" | "any";
+  seatZone?: "front" | "middle" | "back" | "any";
+  seatEmptyNearby?: boolean;
+  seatAvoidWashroom?: boolean;
+  homeAddress?: string;
+  /** The answer to the question the airline or arrival form asked. */
+  answer?: string;
+  /** "I'm not carrying any banned items" for this trip. */
+  noBannedItems?: boolean;
+}
+
+export type CheckinStatus =
+  "scheduled" | "waiting_for_you" | "running" | "done" | "airport" | "backup" | "off" | "past";
+
+export type ArrivalStatus =
+  "not_needed" | "scheduled" | "ready" | "running" | "done" | "waiting_for_you" | "backup";
+
+/** A flight's trip card. Only ever sent to its owner. */
+export interface FlightView {
+  /** The trip item (booking) id. */
+  id: string;
+  airline: string | null;
+  airlineName: string;
+  flightNumber: string | null;
+  fromCode: string | null;
+  fromCity: string | null;
+  toCode: string | null;
+  toCity: string | null;
+  /** Booked times, local at each airport: "2026-11-03T10:30". */
+  departLocal: string | null;
+  arriveLocal: string | null;
+  /** The booked departure as a real moment (ISO). */
+  departAt: string | null;
+  confirmation: string | null;
+  international: boolean;
+  /** Within 6 hours of leaving, until it lands: the card shows live status and leave time. */
+  today: boolean;
+  past: boolean;
+  /** Live flight status is set up (a FlightAware key). */
+  liveAvailable: boolean;
+  live: {
+    status: "on_time" | "delayed" | "cancelled" | "departed" | "landed";
+    delayMinutes: number;
+    departLocal: string | null;
+    arriveLocal: string | null;
+    terminal: string | null;
+    gate: string | null;
+    arrivalTerminal: string | null;
+    baggageClaim: string | null;
+    checkedAt: string | null;
+  } | null;
+  checkin: {
+    status: CheckinStatus;
+    /** When check-in opens (or the next try). */
+    opensAt: string | null;
+    /** Automatic check-in is on for this flight. */
+    auto: boolean;
+    /** The airline asked something we didn't know. */
+    question: string | null;
+    /** Why it's at the airport desk or the backup link. */
+    note: string | null;
+    seat: string | null;
+    group: string | null;
+    terminal: string | null;
+    /** The boarding pass doesn't match the booking (flight, date or name). */
+    mismatch: string | null;
+    /** Paid extras it said no to. */
+    skipped: string[];
+    /** The airline's site, like "united.com". */
+    site: string | null;
+    boardingPass: FileView | null;
+    browser: BrowserView | null;
+  };
+  prep: {
+    /** Needed before check-in. */
+    required: PrepKey[];
+    /** Asked once; check-in works without them. */
+    optional: PrepKey[];
+    /** What we already have ("name", "passport"...). */
+    have: string[];
+    warnings: string[];
+    noBannedItems: boolean;
+    airlineCode: string | null;
+  };
+  arrival: {
+    form: string;
+    country: string;
+    /** The official site. */
+    site: string;
+    status: ArrivalStatus;
+    /** When it can first be filed. */
+    opensAt: string | null;
+    /** The person tapped OK on the health and customs answers. */
+    confirmed: boolean;
+    question: string | null;
+    note: string | null;
+    /** Where they're staying, from their hotel booking. */
+    stay: string | null;
+    file: FileView | null;
+    browser: BrowserView | null;
+  } | null;
+  leave: {
+    leaveBy: string;
+    leaveLocal: string | null;
+    mode: "car" | "train" | null;
+    minutes: number | null;
+    otherMode: "car" | "train" | null;
+    otherMinutes: number | null;
+    beAtLocal: string | null;
+  } | null;
+  /** No home address yet: the leave time can't use traffic. */
+  needsHomeAddress: boolean;
+}
+
 export interface Me {
   userId: string;
   displayName: string | null;
@@ -279,6 +473,11 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     updateChat: (id: string, input: { pinned?: boolean; archived?: boolean; title?: string }) =>
       call<{ chat: ChatSummary }>("PATCH", `/chats/${id}`, input),
     deleteChat: (id: string) => call<{ ok: true }>("DELETE", `/chats/${id}`),
+    /** A read-only link to the chat that anyone can open until it expires. */
+    shareChat: (id: string) =>
+      call<{ path: string; expiresAt: string }>("POST", `/chats/${id}/share`, {}),
+    sharedChat: (token: string) =>
+      call<{ chat: SharedChat }>("GET", `/share/${encodeURIComponent(token)}`),
     getChat: (id: string) =>
       call<{
         chat: ChatSummary;
@@ -335,6 +534,21 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     /** Where the browser goes to connect Gmail (the hosted connect page, then back to the app). */
     gmailConnectUrl: () => `${baseUrl}/connectors/gmail/start`,
     disconnectGmail: () => call<{ ok: true }>("DELETE", "/connectors/gmail"),
+    /** Upcoming flights' trip cards, soonest first. Also moves along any check-in in progress. */
+    flights: () => call<{ flights: FlightView[] }>("GET", "/flights"),
+    flight: (id: string) => call<{ flight: FlightView }>("GET", `/flights/${id}`),
+    /** The Trip prep card: saves the answers (secret numbers go to the vault). */
+    saveFlightPrep: (id: string, input: PrepAnswers) =>
+      call<{ flight: FlightView }>("POST", `/flights/${id}/prep`, input),
+    updateFlight: (id: string, input: { autoCheckin?: boolean; arrivalConfirmed?: boolean }) =>
+      call<{ flight: FlightView }>("PATCH", `/flights/${id}`, input),
+    travelProfile: () => call<{ profile: TravelProfileView }>("GET", "/travel-profile"),
+    /** Settings edits, one field at a time. Empty removes it. */
+    editTravelProfile: (
+      input: PrepAnswers & { frequentFlyer?: Record<string, string | null>; removeAnswer?: string },
+    ) => call<{ profile: TravelProfileView }>("PATCH", "/travel-profile", input),
+    revealTravelDocuments: () =>
+      call<{ documents: TravelDocumentsView }>("POST", "/travel-profile/reveal", {}),
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
     /** Shows an image file in the page (browser pictures). */
     fileViewUrl: (id: string) => `${baseUrl}/files/${id}/view`,

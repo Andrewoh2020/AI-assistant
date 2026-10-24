@@ -12,6 +12,7 @@ import type {
 import type { FetchedPage, SearchBackend, SearchResult } from "./search.js";
 import type {
   CreateThreadInput,
+  InlineImage,
   Travila,
   TravilaMessage,
   TravilaState,
@@ -97,9 +98,12 @@ export class FakeTravila implements Travila {
     this.configUpdates.push({ threadId, input });
   }
 
-  async sendMessage(userId: string, threadId: string, text: string) {
+  images: InlineImage[][] = [];
+
+  async sendMessage(userId: string, threadId: string, text: string, images: InlineImage[] = []) {
     const t = this.thread(userId, threadId);
     this.sends++;
+    this.images.push(images);
     t.runId = this.id("run");
     t.running = true;
     t.script = [...(this.scripts.shift() ?? [{ answer: "ok" }])];

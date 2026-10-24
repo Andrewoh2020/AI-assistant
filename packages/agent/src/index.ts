@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-21b";
+export const PROFILE_VERSION = "main-2026-10-22f";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;
@@ -35,7 +35,9 @@ Research
 - Prefer primary and authoritative sources. When sources disagree, say so and say which you trust and why.
 - Call browse only when fetch_page isn't enough: the page needs JavaScript to show its content (fetch_page came back empty or missing the content), a sign-in, filling in a form, uploading a file the user attached to a website, or downloading a file. It is slower and costs more, so never use it for plain reading, and never to read a file the user attached. Give it one clear goal, a short title, and say exactly what to report back. Files it downloads are given to the user automatically; just mention them.
 - Call memory_search when the user refers to something about themselves you might already know (their preferences, plans, people, past decisions).
-- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail. If it finds none, say Gmail can be connected in Settings › Connected accounts.
+- Call list_trips when the user asks about their trips, flights or hotel bookings. It lists upcoming bookings found in their connected Gmail or saved in chat. If it finds none, say Gmail can be connected in Settings › Connected accounts, or they can paste or attach the booking.
+- Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Say plainly that they fill in the trip card just above your reply. Don't ask for passport or other personal details in the chat; the trip card asks for them securely. If they type them in the chat anyway, don't repeat them, and tell them to enter them on the trip card above in the Main chat instead. Never repeat a passport number the user typed.
+- If save_flight or save_hotel returns an error, fix the details and try once more. If it still fails, tell the user plainly that the booking was not saved and why, so nothing happens automatically; never imply it was saved.
 
 Citations
 - Every result from web_search and fetch_page carries a source number n. When a sentence relies on a source, put its number in square brackets right after the claim, like this: [1] or [2][3].
@@ -46,6 +48,7 @@ Citations
 
 Files
 - When the user attaches files, their message ends with [Attached files]: a list of them (each with a file_id) followed by the text of each file. Answer from that text directly; cite it by file name, not with a number.
+- Images the user attaches (screenshots, photos) come with the message for you to look at. Read them directly; for example, a booking screenshot can be saved with save_flight like any other booking the user gives you.
 - If a file's text was cut short, call read_file with its file_id and start to read more. Files from earlier in the chat can be read the same way.
 - Never put a password, one-time code or other sign-in details in a browse task, not even ones shown on a page or typed by the user. When a site needs a sign-in, the browser asks the user for it in a secure box that you never see. Never write a password, one-time code or other sign-in secret in your answer, not even a demo one shown on a page; just say the browser signed in. If the user types a password into the chat, never repeat it, and tell them to use that box instead. Logins they type there can be saved in their vault, so next time the browser signs in by itself; you can never see or change saved logins, and only the user can delete them. If a browse result says it signed in with a saved login, mention that in a few words.
 - Pass file_ids to browse only when the file has to be uploaded to a website (for example attaching a resume to an application).
@@ -181,7 +184,66 @@ export const TOOLS: ToolDefinition[] = [
       "List the user's upcoming trips: flights and hotel stays found in their connected Gmail, with dates, times and booking references.",
     parametersJsonSchema: { type: "object", properties: {} },
   },
+  // Two tools rather than one with a "kind": with every flight detail optional, the main model
+  // (through Travila) sent only the arrival airport, so the details it needs are required here.
+  {
+    name: "save_flight",
+    serverId: "client",
+    description:
+      "Save one flight leg of the user's own booking to their trips. The app then checks them in automatically when check-in opens and posts a trip card.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        airline: { type: "string", description: 'Airline name, like "United".' },
+        flight_number: { type: "string", description: 'Airline code and number, like "UA 123".' },
+        from_code: { type: "string", description: 'Departure airport IATA code, like "SFO".' },
+        to_code: { type: "string", description: 'Arrival airport IATA code, like "JFK".' },
+        depart_at: {
+          type: "string",
+          description: "Departure in local time at the airport, YYYY-MM-DDTHH:MM.",
+        },
+        arrive_at: {
+          type: "string",
+          description:
+            "Arrival in local time at the airport, YYYY-MM-DDTHH:MM. Leave out if not known.",
+        },
+        confirmation: {
+          type: "string",
+          description: "Booking reference / confirmation code. Leave out if not given.",
+        },
+      },
+      required: ["airline", "flight_number", "from_code", "to_code", "depart_at"],
+    },
+  },
+  {
+    name: "save_hotel",
+    serverId: "client",
+    description:
+      "Save one of the user's own hotel stays to their trips. Arrival cards use it as the place they're staying.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        hotel_name: { type: "string" },
+        city: { type: "string" },
+        address: { type: "string", description: "Street address. Leave out if not given." },
+        check_in: { type: "string", description: "Check-in date, YYYY-MM-DD." },
+        check_out: { type: "string", description: "Check-out date, YYYY-MM-DD." },
+        confirmation: {
+          type: "string",
+          description: "Booking reference / confirmation code. Leave out if not given.",
+        },
+      },
+      required: ["hotel_name", "city", "check_in", "check_out"],
+    },
+  },
 ];
 
 export type ToolName =
-  "web_search" | "fetch_page" | "browse" | "read_file" | "memory_search" | "list_trips";
+  | "web_search"
+  | "fetch_page"
+  | "browse"
+  | "read_file"
+  | "memory_search"
+  | "list_trips"
+  | "save_flight"
+  | "save_hotel";

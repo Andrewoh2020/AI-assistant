@@ -430,10 +430,24 @@ code {
   right: 4px;
   opacity: 0;
 }
+/* The open chat's ⋯ always shows, so Share is easy to find; phones and tablets can't hover, so
+   there every row shows it. */
 .chat-row:hover .row-menu,
+.chat-row.is-current .row-menu,
 .chat-row:focus-within .row-menu,
 .row-menu:has([aria-expanded="true"]) {
   opacity: 1;
+}
+@media (hover: none) {
+  .chat-row .row-menu {
+    opacity: 1;
+  }
+  .chat-list .chat-row a {
+    padding-right: 36px;
+  }
+}
+.chat-list .chat-row.is-current a {
+  padding-right: 36px;
 }
 .pin {
   display: inline-grid;
@@ -1720,4 +1734,282 @@ dialog.confirm p {
 }
 .sheet-body > .bsign-submit {
   margin-bottom: 12px;
+}
+
+/* Trip card (flights) --------------------------------------------------------------------------
+   From the plan's flight-day card: route, status pill, local times, then what check-in is doing. */
+.trip-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  padding: 16px 18px;
+  margin: 8px 0;
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.trip-card.is-pinned {
+  box-shadow: var(--shadow-1);
+  margin: 0 0 12px;
+}
+.trip-card.is-cancelled {
+  border-color: var(--danger);
+}
+.trip-kicker {
+  font-size: var(--type-caption-size);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.trip-route {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-top: 4px;
+}
+.trip-meta {
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+}
+.trip-pill {
+  align-self: flex-start;
+  border-radius: var(--radius-pill);
+  padding: 3px 11px;
+  font-size: 13px;
+  font-weight: 650;
+  margin: 8px 0 4px;
+}
+.pill-ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.pill-late {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.pill-bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.pill-info {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.trip-times {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+.trip-times > div {
+  display: flex;
+  flex-direction: column;
+}
+.trip-times b {
+  font-size: 22px;
+  line-height: 1.25;
+}
+.trip-times b.is-late {
+  color: var(--warn);
+}
+.trip-times-end {
+  text-align: right;
+}
+.trip-line {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 8px;
+  font-size: var(--type-small-size);
+}
+.trip-section {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 10px;
+  font-size: var(--type-small-size);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trip-status {
+  margin: 0;
+}
+.trip-status.status-backup,
+.trip-status.status-airport {
+  color: var(--warn);
+}
+.trip-warn {
+  margin: 0;
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: var(--radius-s);
+  padding: 8px 10px;
+  font-size: var(--type-small-size);
+}
+.trip-browser {
+  margin-top: 10px;
+}
+.trip-browser .bcard {
+  width: 100%;
+  margin: 0;
+}
+.trip-arrival-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trip-submit {
+  margin-top: 2px;
+}
+.trip-leave b {
+  font-size: var(--type-body-size);
+}
+.trip-note,
+.trip-hint {
+  color: var(--ink-2);
+  font-size: var(--type-small-size);
+  margin: 0;
+}
+.trip-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.trip-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: var(--ink-2);
+  font-size: var(--type-caption-size);
+}
+.trip-prep {
+  margin-top: 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius-m);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trip-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.trip-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--type-small-size);
+  min-width: 0;
+}
+.trip-field input,
+.trip-field select {
+  font: inherit;
+  font-size: 16px; /* prevents iOS zoom */
+  min-height: var(--touch);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  width: 100%;
+}
+.trip-seat {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--type-small-size);
+}
+.trip-seat legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+.trip-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.trip-choice button {
+  font: inherit;
+  font-size: var(--type-small-size);
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.trip-choice button.is-on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
+}
+.trip-banned {
+  align-items: flex-start;
+}
+.trip-banned input {
+  margin-top: 2px;
+  flex: none;
+}
+.today-pin {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding-top: 4px;
+}
+@media (max-width: 520px) {
+  .trip-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A chat someone shared with a read-only link (app/share/[token]). */
+.shared-chat {
+  max-width: var(--chat-column);
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+.shared-head {
+  margin-bottom: 24px;
+}
+.shared-head h1 {
+  font-size: var(--type-h1-size);
+  margin: 0 0 4px;
+}
+.shared-note {
+  margin: -12px 0 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.shared-time {
+  margin: -16px 0 20px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.turn-user + .shared-time {
+  text-align: right;
+}
+.share-link {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  font: inherit;
+  font-size: 13px;
+}
+.share-error {
+  display: block;
+  margin-top: 8px;
 }
