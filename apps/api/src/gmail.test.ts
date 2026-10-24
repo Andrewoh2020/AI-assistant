@@ -4,6 +4,7 @@ import { buildApp } from "./app.js";
 import {
   cleanBooking,
   dedupeKey,
+  emailText,
   fromSchemaOrg,
   type BookingReader,
   type FoundBooking,
@@ -245,6 +246,18 @@ describe("booking emails", () => {
       status: "confirmed",
     });
     expect(h).toMatchObject({ kind: "hotel", name: "Hotel One", status: "cancelled" });
+  });
+
+  it("reads the HTML when the plain-text part is only a line (AirAsia)", () => {
+    const html =
+      "<html><body><p>Depart: AirAsia, AK 706, 22 Oct 12:10 SIN</p>" +
+      "<p>Return: AirAsia, AK 705, 25 Oct 08:10 KUL</p></body></html>";
+    const text = emailText({ text: "AirAsia Email booking Confimed", html });
+    expect(text).toContain("AK 705");
+    expect(text).toContain("AK 706");
+    // A full plain-text part is still used as it is.
+    const plain = "Your flight AK 705 departs Kuala Lumpur on 25 Oct at 08:10. Booking NIUR5X.";
+    expect(emailText({ text: plain, html: "<p>AK 705</p>" })).toBe(plain);
   });
 
   it("drops what the model returns when it isn't a usable booking", () => {
