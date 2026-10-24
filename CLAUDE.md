@@ -26,9 +26,8 @@ setup, rebuilds and restarts yourself.
   `pnpm install`, `pnpm build`, `pnpm db:migrate`, then
   `launchctl kickstart -k gui/$(id -u)/com.andrew.ai-assistant`. Check localhost:3000 loads.
 - Keys live only in the app's private `.env`. Never print it or copy keys anywhere else.
-- Current work is on branch `claude/project-thread-8dvjzv`: the Mac branch
-  `claude/project-thread-t0zqo2` (flight check-in + Clerk sign-in) plus the Ability branding.
-  None of it is merged into `main` yet.
+- Everything (Gmail, flight check-in, share links, Clerk sign-in, the Ability branding) is merged
+  into `main` (2026-10-24). Start new work from `main`.
   Push work to GitHub so it can be picked up from the cloud again later.
 
 ## Live site
