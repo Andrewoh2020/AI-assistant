@@ -1,0 +1,19 @@
+DROP INDEX trip_items_dedupe;
+ALTER TABLE trip_items
+  DROP COLUMN dedupe_key,
+  DROP COLUMN source,
+  DROP COLUMN source_message_id,
+  DROP COLUMN updated_at;
+ALTER TABLE trips
+  DROP COLUMN starts_on,
+  DROP COLUMN ends_on,
+  DROP COLUMN destination;
+DROP TABLE gmail_scanned;
+DROP INDEX connector_accounts_one_per_provider;
+ALTER TABLE connector_accounts
+  DROP COLUMN account_email,
+  DROP COLUMN scopes,
+  DROP COLUMN last_synced_at,
+  DROP COLUMN sync_started_at,
+  DROP COLUMN last_error;
+DROP TABLE vault.connected_accounts;

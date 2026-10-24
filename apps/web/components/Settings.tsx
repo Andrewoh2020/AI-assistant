@@ -1,6 +1,12 @@
 "use client";
 
-import { ApiError, type VaultEvent, type VaultLogin } from "@ai-assistant/api-client";
+import {
+  ApiError,
+  type Booking,
+  type GmailStatus,
+  type VaultEvent,
+  type VaultLogin,
+} from "@ai-assistant/api-client";
 import {
   useCallback,
   useEffect,
@@ -17,18 +23,25 @@ import { api } from "@/lib/client";
  * Secure credentials store (the vault); the other rows arrive with their features.
  */
 
-type Page = { name: "home" } | { name: "vault" } | { name: "login"; id: string };
+type Page =
+  { name: "home" } | { name: "vault" } | { name: "login"; id: string } | { name: "connections" };
+
+/** How connecting Gmail went, from Google's sign-in coming back to the app. */
+export type GmailResult = "connected" | "cancelled" | "failed" | "unavailable";
 
 export function Settings({
   start = "home",
+  gmailResult = null,
   onClose,
   onSignOut,
 }: {
-  start?: "home" | "vault";
+  start?: "home" | "vault" | "connections";
+  gmailResult?: GmailResult | null;
   onClose: () => void;
   onSignOut: () => void;
 }) {
-  const [page, setPage] = useState<Page>(start === "vault" ? { name: "vault" } : { name: "home" });
+  const [page, setPage] = useState<Page>({ name: start } as Page);
+  const [gmail, setGmail] = useState<GmailStatus | null>(null);
   const [logins, setLogins] = useState<VaultLogin[] | null>(null);
   const [activity, setActivity] = useState<VaultEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -45,9 +58,18 @@ export function Settings({
     }
   }, []);
 
+  const loadGmail = useCallback(async () => {
+    try {
+      setGmail(await api.gmail());
+    } catch {
+      // The row just shows "Gmail" until it loads.
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadGmail();
+  }, [load, loadGmail]);
 
   // Escape closes; focus starts on the close button.
   const onCloseRef = useRef(onClose);
@@ -66,13 +88,19 @@ export function Settings({
 
   const login = page.name === "login" ? logins?.find((l) => l.id === page.id) : undefined;
   const back: Page | null =
-    page.name === "vault" ? { name: "home" } : page.name === "home" ? null : { name: "vault" };
+    page.name === "vault" || page.name === "connections"
+      ? { name: "home" }
+      : page.name === "home"
+        ? null
+        : { name: "vault" };
   const title =
     page.name === "home"
       ? "Settings"
       : page.name === "vault"
         ? "Secure credentials store"
-        : (login?.site ?? "Saved login");
+        : page.name === "connections"
+          ? "Connected accounts"
+          : (login?.site ?? "Saved login");
 
   return (
     <div className="sheet-scrim" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -122,6 +150,18 @@ export function Settings({
                   }
                   onClick={() => setPage({ name: "vault" })}
                 />
+                <Row
+                  icon={<MailIcon />}
+                  label="Connected accounts"
+                  sub={
+                    gmail?.connected
+                      ? "Gmail connected"
+                      : gmail?.needsReconnect
+                        ? "Gmail needs reconnecting"
+                        : "Gmail"
+                  }
+                  onClick={() => setPage({ name: "connections" })}
+                />
               </div>
               <div className="group">
                 <button type="button" className="row row-danger" onClick={onSignOut}>
@@ -136,6 +176,9 @@ export function Settings({
               activity={activity}
               onPick={(id) => setPage({ name: "login", id })}
             />
+          )}
+          {page.name === "connections" && (
+            <ConnectionsPage gmail={gmail} result={gmailResult} onChanged={loadGmail} />
           )}
           {page.name === "login" &&
             (login ? (
@@ -158,6 +201,201 @@ export function Settings({
       </section>
     </div>
   );
+}
+
+const RESULT_TEXT: Record<GmailResult, string> = {
+  connected: "Gmail is connected. Looking for your bookings now.",
+  cancelled: "Gmail wasn't connected.",
+  failed: "Gmail couldn't be connected. Try again.",
+  unavailable: "Gmail can't be connected right now. Try again later.",
+};
+
+function ConnectionsPage({
+  gmail,
+  result,
+  onChanged,
+}: {
+  gmail: GmailStatus | null;
+  result: GmailResult | null;
+  onChanged: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const checking = !!gmail?.connected && !gmail.lastCheckedAt;
+
+  // The first check runs in the background; show its trips as soon as it is done.
+  useEffect(() => {
+    if (!checking) return;
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - started > 3 * 60 * 1000) clearInterval(timer);
+      else void onChanged();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [checking, onChanged]);
+
+  async function disconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.disconnectGmail();
+      await onChanged();
+      setConfirming(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "That didn't work. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const connect = (label: string) => (
+    <a className="btn btn-small" href={api.gmailConnectUrl()}>
+      {label}
+    </a>
+  );
+
+  return (
+    <>
+      <p className="group-intro">
+        Connect Gmail and the assistant finds your flight and hotel bookings by itself, so it can
+        get you ready for check-in without being asked. It only reads mail. It never sends, changes
+        or deletes anything.
+      </p>
+      {result && (
+        <p className={result === "connected" ? "group-note" : "form-error"} role="status">
+          {RESULT_TEXT[result]}
+        </p>
+      )}
+      <div className="group">
+        <div className="row row-static row-account">
+          <span className="row-icon" aria-hidden="true">
+            <MailIcon />
+          </span>
+          <span className="row-text">
+            <span className="row-label">Gmail</span>
+            <span className="row-sub">
+              {gmail === null
+                ? " "
+                : gmail.connected
+                  ? (gmail.email ?? "Connected")
+                  : gmail.needsReconnect
+                    ? `${gmail.email ?? "Gmail"} · The connection stopped working`
+                    : "Not connected"}
+            </span>
+          </span>
+          {gmail && !gmail.connected && connect(gmail.needsReconnect ? "Reconnect" : "Connect")}
+        </div>
+        {gmail?.connected && (
+          <Detail
+            label="Last checked"
+            value={gmail.lastCheckedAt ? when(gmail.lastCheckedAt) : "Checking now…"}
+          />
+        )}
+      </div>
+      {gmail && (gmail.connected || gmail.trips.length > 0) && (
+        <>
+          <h3 className="group-title">Upcoming trips</h3>
+          <div className="group">
+            {gmail.trips.length === 0 ? (
+              <p className="row row-static row-empty">
+                {checking
+                  ? "Looking through your mail…"
+                  : "No upcoming flights or hotel stays found yet. New booking emails are picked up by themselves."}
+              </p>
+            ) : (
+              gmail.trips.map((t) => (
+                <div key={t.id} className="row row-static row-trip">
+                  <span className="row-text">
+                    <span className="row-label">{t.title}</span>
+                    <span className="row-sub">{tripDates(t.startsOn, t.endsOn)}</span>
+                    {t.bookings.map((b) => (
+                      <span key={b.id} className="row-sub">
+                        {bookingLine(b)}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+      {gmail?.connected && (
+        <div className="group">
+          {confirming ? (
+            <div className="row row-static row-confirm">
+              <p>
+                Disconnect Gmail? The assistant stops reading your mail. Trips it already found
+                stay.
+              </p>
+              <div className="row-actions">
+                <button
+                  type="button"
+                  className="btn btn-small btn-danger"
+                  disabled={busy}
+                  onClick={() => void disconnect()}
+                >
+                  Disconnect
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small btn-secondary"
+                  disabled={busy}
+                  onClick={() => setConfirming(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="row row-danger" onClick={() => setConfirming(true)}>
+              Disconnect Gmail
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "3 Nov" or "3 Nov, 10:30" from a local date or time, without moving it to this time zone. */
+function localWhen(local: string): string {
+  const [, m, d] = local.slice(0, 10).split("-").map(Number) as [number, number, number];
+  return `${d} ${MONTHS[m - 1]}${local.length >= 16 ? `, ${local.slice(11, 16)}` : ""}`;
+}
+
+function tripDates(start: string | null, end: string | null): string {
+  if (!start) return "";
+  return end && end !== start ? `${localWhen(start)} to ${localWhen(end)}` : localWhen(start);
+}
+
+function bookingLine(b: Booking): string {
+  if (b.kind === "flight") {
+    const route = [b.fromCode ?? b.fromCity, b.toCode ?? b.toCity].filter(Boolean).join(" → ");
+    return [
+      `✈︎ ${b.flightNumber ?? b.airline ?? "Flight"}`,
+      route,
+      b.departAt ? localWhen(b.departAt) : null,
+      b.confirmation,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  return [
+    `⌂ ${b.name ?? "Hotel"}`,
+    b.checkIn ? tripDates(b.checkIn, b.checkOut) : null,
+    b.confirmation,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function VaultPage({
@@ -632,6 +870,7 @@ export const VaultIcon = () =>
   svg(
     "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3ZM9.5 11.5h5v4h-5v-4ZM10.5 11.5V10a1.5 1.5 0 0 1 3 0v1.5",
   );
+const MailIcon = () => svg("M3.5 6.5h17v11h-17v-11ZM3.5 7l8.5 6.5L20.5 7");
 const ChevronRight = () => <span className="row-chevron">{svg("M9 6l6 6-6 6")}</span>;
 const ChevronLeft = () => svg("M15 6l-6 6 6 6");
 const CloseIcon = () => svg("M6 6l12 12M18 6 6 18");

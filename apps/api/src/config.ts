@@ -14,6 +14,8 @@ export interface Config {
   /** People need this code to create an account. Empty disables sign-up. */
   signupCode: string;
   secureCookies: boolean;
+  /** The site's own address, like "https://example.com"; empty: taken from each request. */
+  publicUrl: string;
 }
 
 export function loadConfig(env = process.env): Config {
@@ -36,5 +38,6 @@ export function loadConfig(env = process.env): Config {
     vaultMasterKey: env.VAULT_MASTER_KEY ?? "",
     signupCode: env.SIGNUP_CODE ?? "",
     secureCookies: hosted,
+    publicUrl: (env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
   };
 }

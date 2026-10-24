@@ -180,6 +180,52 @@ export interface VaultEvent {
   at: string;
 }
 
+/** A flight or hotel stay the assistant found (today: in Gmail). */
+export type Booking =
+  | {
+      kind: "flight";
+      airline: string | null;
+      /** Like "NH 7". */
+      flightNumber: string | null;
+      fromCode: string | null;
+      fromCity: string | null;
+      toCode: string | null;
+      toCity: string | null;
+      /** Local time at the airport, like "2026-11-03T10:30". */
+      departAt: string | null;
+      arriveAt: string | null;
+      confirmation: string | null;
+    }
+  | {
+      kind: "hotel";
+      name: string | null;
+      city: string | null;
+      address: string | null;
+      /** Like "2026-11-03". */
+      checkIn: string | null;
+      checkOut: string | null;
+      confirmation: string | null;
+    };
+
+export interface TripView {
+  id: string;
+  title: string;
+  startsOn: string | null;
+  endsOn: string | null;
+  bookings: (Booking & { id: string })[];
+}
+
+/** Gmail as Settings shows it. Never holds the sign-in token. */
+export interface GmailStatus {
+  connected: boolean;
+  /** The connection stopped working (expired or removed); connecting again fixes it. */
+  needsReconnect: boolean;
+  email: string | null;
+  lastCheckedAt: string | null;
+  /** Upcoming trips found in the mail, soonest first. */
+  trips: TripView[];
+}
+
 export interface Me {
   userId: string;
   displayName: string | null;
@@ -285,6 +331,10 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     /** Saves the ticked logins (by index) from the export file. */
     importVault: (input: { csv: string; manager: PasswordManager; indices: number[] }) =>
       call<{ imported: number; replaced: number }>("POST", "/vault/import", input),
+    gmail: () => call<GmailStatus>("GET", "/connectors/gmail"),
+    /** Where the browser goes to connect Gmail (the hosted connect page, then back to the app). */
+    gmailConnectUrl: () => `${baseUrl}/connectors/gmail/start`,
+    disconnectGmail: () => call<{ ok: true }>("DELETE", "/connectors/gmail"),
     fileUrl: (id: string) => `${baseUrl}/files/${id}/download`,
     /** Shows an image file in the page (browser pictures). */
     fileViewUrl: (id: string) => `${baseUrl}/files/${id}/view`,

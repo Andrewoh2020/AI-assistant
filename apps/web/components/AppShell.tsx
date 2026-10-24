@@ -28,7 +28,7 @@ import { Answer } from "./Answer";
 import { BrowserCard, BrowserPanel } from "./BrowserCard";
 import { FileChip, FileList, PaperclipIcon } from "./Files";
 import { Menu, MenuItem } from "./Menu";
-import { Settings, VaultIcon } from "./Settings";
+import { Settings, VaultIcon, type GmailResult } from "./Settings";
 
 const POLL_MS = 1500;
 /** Replies in chats you aren't looking at keep going too, checked a little less often. */
@@ -75,7 +75,24 @@ export function AppShell({ chatId }: { chatId: string }) {
   const panelToggleRef = useRef<HTMLAnchorElement>(null);
   // The browser shown in the right-hand preview panel.
   const [preview, setPreview] = useState<{ id: string; takeControl: boolean } | null>(null);
-  const [settings, setSettings] = useState<"home" | "vault" | null>(null);
+  const [settings, setSettings] = useState<"home" | "vault" | "connections" | null>(null);
+  const [gmailResult, setGmailResult] = useState<GmailResult | null>(null);
+  // Back from Google's sign-in (connecting Gmail): open Settings where it left off.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("settings") !== "connections") return;
+    setSettings("connections");
+    const result = q.get("gmail");
+    if (
+      result === "connected" ||
+      result === "cancelled" ||
+      result === "failed" ||
+      result === "unavailable"
+    ) {
+      setGmailResult(result);
+    }
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
   // The chat list opens over the chat (not beside it) when it isn't kept visible, or while the
   // browser preview takes the room.
   const floating = !keepPanel || !!preview;
@@ -921,7 +938,15 @@ export function AppShell({ chatId }: { chatId: string }) {
         </ConfirmDialog>
       )}
       {settings && (
-        <Settings start={settings} onClose={() => setSettings(null)} onSignOut={signOut} />
+        <Settings
+          start={settings}
+          gmailResult={gmailResult}
+          onClose={() => {
+            setSettings(null);
+            setGmailResult(null);
+          }}
+          onSignOut={signOut}
+        />
       )}
       {previewBrowser && (
         <BrowserPanel

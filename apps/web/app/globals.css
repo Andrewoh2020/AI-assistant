@@ -1527,6 +1527,14 @@ dialog.confirm p {
 .row-confirm p {
   margin: 0;
 }
+/* Connected accounts: the account row ends with its Connect button. */
+.row-account .btn {
+  flex: none;
+  text-decoration: none;
+}
+.row-trip .row-text {
+  gap: 2px;
+}
 /* Saved password on the login page: dots until Show. */
 .row-secret {
   justify-content: space-between;
