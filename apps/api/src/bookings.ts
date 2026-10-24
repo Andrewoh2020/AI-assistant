@@ -199,6 +199,15 @@ export function htmlToText(html: string): string {
     .trim();
 }
 
+/**
+ * The email's words: its plain-text part or its HTML, whichever says more. Some senders (AirAsia)
+ * put a single line in the plain-text part and the whole itinerary only in the HTML.
+ */
+export function emailText(mail: Pick<MailMessage, "text" | "html">): string {
+  const fromHtml = mail.html ? htmlToText(mail.html) : "";
+  return mail.text.trim().length >= fromHtml.length ? mail.text : fromHtml;
+}
+
 /** Worth reading at all: an email that talks about a flight or a hotel stay. */
 const TRAVEL =
   /flight|depart|boarding|airline|itinerary|e-?ticket|hotel|check-?in|reservation|booking/i;
@@ -219,7 +228,7 @@ export class DeepSeekBookingReader implements BookingReader {
   async read(mail: MailMessage): Promise<FoundBooking[]> {
     const structured = fromSchemaOrg(mail.html);
     if (structured.length) return structured;
-    const text = (mail.text || htmlToText(mail.html)).slice(0, 15000);
+    const text = emailText(mail).slice(0, 15000);
     if (!TRAVEL.test(`${mail.subject}\n${text}`)) return [];
     const res = await postJson<{ choices?: { message?: { content?: string } }[] }>(
       "DeepSeek",
