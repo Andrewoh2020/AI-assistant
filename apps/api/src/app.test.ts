@@ -840,6 +840,55 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     expect(error).toMatch(/^Not saved: .*tell the user it wasn't saved/);
   });
 
+  it("shows travel details and offers Gmail as cards in the chat", async () => {
+    const a = await signUp();
+    const chat = await mainChatId(a);
+    const cards = async () =>
+      (await app.inject({ method: "GET", url: `/chats/${chat}`, headers: { cookie: a } }))
+        .json()
+        .messages.map((m: { card: string | null; text: string }) => m.card)
+        .filter(Boolean);
+
+    travila.scripts.push([
+      { tools: [{ name: "show_travel_details", args: {} }] },
+      { answer: "Here they are." },
+    ]);
+    const shown = await ask(a, chat, "What travel details do you have for me?");
+    await pollUntilDone(a, shown.json().run.id);
+    expect(await cards()).toEqual(["travel"]);
+    const messages = (
+      await app.inject({ method: "GET", url: `/chats/${chat}`, headers: { cookie: a } })
+    ).json().messages as { card: string | null; text: string }[];
+    // The card sits just above the reply.
+    expect(messages.at(-2)!.card).toBe("travel");
+    expect(messages.at(-1)!.text).toBe("Here they are.");
+
+    // Asked twice in one reply, the Gmail card shows once.
+    const offer = {
+      name: "offer_gmail",
+      args: { why: "Connect Gmail and I'll find this by myself." },
+    };
+    travila.scripts.push([{ tools: [offer, offer] }, { answer: "Pasting works too." }]);
+    const first = await ask(a, chat, "When's my flight?");
+    await pollUntilDone(a, first.json().run.id);
+    expect(await cards()).toEqual(["travel", "gmail"]);
+    const results = travila.submitted.at(-1)!.results.map((r) => r.resultJson as object);
+    expect(results.some((r) => "shown" in r && /Already offered/.test(String(r.shown)))).toBe(true);
+
+    // A different task later can offer it again; once connected, it isn't offered.
+    travila.scripts.push([{ tools: [offer] }, { answer: "Connect it if you like." }]);
+    await pollUntilDone(a, (await ask(a, chat, "Any hotel bookings?")).json().run.id);
+    expect(await cards()).toEqual(["travel", "gmail", "gmail"]);
+    await sql!`
+      INSERT INTO connector_accounts (user_id, provider, status, account_email)
+      SELECT c.user_id, 'gmail', 'connected', 'me@gmail.com' FROM chats c WHERE c.id = ${chat}`;
+    travila.scripts.push([{ tools: [offer] }, { answer: "Done." }]);
+    await pollUntilDone(a, (await ask(a, chat, "Any bills due?")).json().run.id);
+    expect(await cards()).toEqual(["travel", "gmail", "gmail"]);
+    const last = travila.submitted.at(-1)!.results[0]!.resultJson as object;
+    expect(last).toHaveProperty("already_connected");
+  });
+
   it("saves travel details typed in the chat, as Settings would", async () => {
     const a = await signUp();
     const chat = await mainChatId(a);

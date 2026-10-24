@@ -424,6 +424,32 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     expect((await status(alice)).trips).toHaveLength(1);
   });
 
+  it("comes back to the chat whose Connect Gmail card was used", async () => {
+    const cookie = await signUp();
+    const chats = (await app.inject({ method: "GET", url: "/chats", headers: { cookie } })).json();
+    const chat = chats.chats.find((c: { kind: string }) => c.kind === "main").id as string;
+    const startFrom = async (from: string) => {
+      const start = await app.inject({
+        method: "GET",
+        url: `/connectors/gmail/start?chat=${from}`,
+        headers: { cookie, host: "localhost:3000" },
+      });
+      const to = new URL(start.headers.location as string);
+      return to.searchParams.get("successUrl")!;
+    };
+    const success = await startFrom(chat);
+    google.connected.add(google.lastAsker);
+    const back = await backFrom(success, cookie);
+    expect(back.headers.location).toBe(`/chat/${chat}?gmail=connected`);
+    await settle();
+
+    // A chat that isn't theirs goes back to Settings instead.
+    const other = "11111111-1111-4111-8111-111111111111";
+    const elsewhere = await backFrom(await startFrom(other), cookie);
+    expect(elsewhere.headers.location).toMatch(/\?settings=connections&gmail=connected$/);
+    await settle();
+  });
+
   it("says when connecting was cancelled, didn't connect, or isn't available", async () => {
     const cookie = await signUp();
     const links = await startConnect(cookie);

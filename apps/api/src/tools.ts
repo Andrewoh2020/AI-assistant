@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Booking } from "@ai-assistant/api-client";
-import { withUser, type Sql } from "@ai-assistant/db";
+import { withUser, type Sql, type TransactionSql } from "@ai-assistant/db";
 import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
@@ -325,27 +325,28 @@ export async function runTool(
     }
 
     if (call.name === "offer_gmail") {
-      const why = typeof args.why === "string" ? args.why.trim().slice(0, 300) : "";
-      const [state] = await withUser(
-        ctx.sql,
-        ctx.userId,
-        (tx) => tx<{ connected: boolean; offered: boolean }[]>`
+      const why =
+        (typeof args.why === "string" ? args.why.trim().slice(0, 300) : "") ||
+        "Connect Gmail and I can find things like this in your email by myself.";
+      // One step per reply at a time: two offers asked for at once must not both post a card.
+      const outcome = await withUser(ctx.sql, ctx.userId, async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${`${ctx.runId}:gmail`}))`;
+        const [state] = await tx<{ connected: boolean; offered: boolean }[]>`
           SELECT
             EXISTS (SELECT 1 FROM connector_accounts
                     WHERE provider = 'gmail' AND status = 'connected') AS connected,
             EXISTS (SELECT 1 FROM messages m JOIN runs r ON r.id = ${ctx.runId}
                     WHERE m.chat_id = r.chat_id AND m.created_at >= r.created_at
-                      AND m.parts @> '[{"type": "card", "card": {"kind": "gmail"}}]') AS offered`,
-      );
+                      AND m.parts @> '[{"type": "card", "card": {"kind": "gmail"}}]') AS offered`;
+        if (state?.connected) return "connected";
+        if (state?.offered) return "offered";
+        await insertChatCard(tx, ctx, "gmail", why);
+        return "shown";
+      });
       await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
-      if (state?.connected)
+      if (outcome === "connected")
         return { already_connected: "Gmail is already connected; don't offer it." };
-      if (state?.offered) return { shown: "Already offered in this reply." };
-      await postChatCard(
-        ctx,
-        "gmail",
-        why || "Connect Gmail and I can find things like this in your email by myself.",
-      );
+      if (outcome === "offered") return { shown: "Already offered in this reply." };
       return {
         shown:
           "A Connect Gmail card is now just above your reply. Don't repeat the offer in your reply.",
@@ -375,18 +376,23 @@ export async function runTool(
  * own message just above the reply, like a flight's trip card.
  */
 async function postChatCard(ctx: ToolContext, kind: "travel" | "gmail", text: string) {
+  await withUser(ctx.sql, ctx.userId, (tx) => insertChatCard(tx, ctx, kind, text));
+}
+
+async function insertChatCard(
+  tx: TransactionSql,
+  ctx: ToolContext,
+  kind: "travel" | "gmail",
+  text: string,
+) {
   const parts = [
     { type: "text", text, citations: [] },
     { type: "card", card: { kind } },
   ];
-  await withUser(
-    ctx.sql,
-    ctx.userId,
-    (tx) => tx`
-      INSERT INTO messages (user_id, chat_id, role, parts, origin)
-      SELECT ${ctx.userId}, chat_id, 'assistant', ${tx.json(parts as never)}, 'proactive'
-      FROM runs WHERE id = ${ctx.runId}`,
-  );
+  await tx`
+    INSERT INTO messages (user_id, chat_id, role, parts, origin)
+    SELECT ${ctx.userId}, chat_id, 'assistant', ${tx.json(parts as never)}, 'proactive'
+    FROM runs WHERE id = ${ctx.runId}`;
 }
 
 const TRAVEL_FIELDS: Record<string, keyof PrepInput> = {
