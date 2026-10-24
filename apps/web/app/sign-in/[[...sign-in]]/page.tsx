@@ -8,13 +8,23 @@ import { SignIn } from "@clerk/nextjs";
 export default function SignInPage() {
   return (
     <main className="center-page">
-      <SignIn
-        routing="path"
-        path="/sign-in"
-        withSignUp
-        forceRedirectUrl="/signed-in"
-        signUpForceRedirectUrl="/signed-in"
-      />
+      <div className="auth-stack">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="brand-stacked"
+          src="/brand/ability-wordmark-stacked.png"
+          alt="Ability"
+          width={86}
+          height={104}
+        />
+        <SignIn
+          routing="path"
+          path="/sign-in"
+          withSignUp
+          forceRedirectUrl="/signed-in"
+          signUpForceRedirectUrl="/signed-in"
+        />
+      </div>
     </main>
   );
 }

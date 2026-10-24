@@ -1,4 +1,8 @@
-# AI Assistant (Muse competitor)
+# Ability (Muse competitor)
+
+The product is called **Ability** (Andrew's earlier startup brand, adopted 2026-10-23). Logos and
+brand colors are in `packages/tokens/brand` and the `brand` export of `packages/tokens`. Internal
+package names stay `@ai-assistant/*`.
 
 Andrew's personal AI assistant, built to compete with Meta's Muse. Andrew is not an engineer:
 explain choices in plain words, never hand him install steps or manual commands, and do the
@@ -22,7 +26,8 @@ setup, rebuilds and restarts yourself.
   `pnpm install`, `pnpm build`, `pnpm db:migrate`, then
   `launchctl kickstart -k gui/$(id -u)/com.andrew.ai-assistant`. Check localhost:3000 loads.
 - Keys live only in the app's private `.env`. Never print it or copy keys anywhere else.
-- Current work is on branch `claude/project-thread-i5c4zy` (PR #6, not merged into `main` yet).
+- Everything (Gmail, flight check-in, share links, Clerk sign-in, the Ability branding) is merged
+  into `main` (2026-10-24). Start new work from `main`.
   Push work to GitHub so it can be picked up from the cloud again later.
 
 ## Live site
@@ -42,3 +47,7 @@ setup, rebuilds and restarts yourself.
 - The browser (Browser Use) must never buy or pay. A run's cost setting is a cap, not the price
   (real runs cost under a cent); say "cap" when showing it.
 - Tests: Postgres at `postgres://postgres:postgres@localhost:5432/ai_assistant_test`, `pnpm test`.
+  On Andrew's Mac it's `postgres://andrewoh@localhost:5432/ai_assistant_test`; the database tests
+  are skipped unless `DATABASE_URL` points there.
+- Flights are matched by route and departure time, not flight number: codeshare emails give the
+  same flight different numbers (kept as `codeshares`).

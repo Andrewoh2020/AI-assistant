@@ -4,8 +4,9 @@ import "@ai-assistant/tokens/tokens.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Assistant",
-  description: "Your personal assistant for questions, research and explanations.",
+  title: "Ability",
+  description: "Ability, your personal assistant for questions, research and getting things done.",
+  appleWebApp: { title: "Ability" },
 };
 
 export const viewport: Viewport = {

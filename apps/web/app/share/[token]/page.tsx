@@ -38,6 +38,14 @@ export default function SharedChatPage() {
   return (
     <main className="shared-chat">
       <header className="shared-head">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          className="brand-wordmark"
+          src="/brand/ability-wordmark.png"
+          alt="Ability"
+          width={92}
+          height={24}
+        />
         <h1>{chat.title}</h1>
         <p className="muted">
           A read-only copy shared with you. Passport, ID and booking numbers are hidden. The link

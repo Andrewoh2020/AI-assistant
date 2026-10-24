@@ -2,7 +2,6 @@
 
 import {
   ApiError,
-  type Booking,
   type GmailStatus,
   type VaultEvent,
   type VaultLogin,
@@ -16,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { api } from "@/lib/client";
+import { Menu, MenuItem } from "./Menu";
 import { TravelPage } from "./TravelSettings";
 
 /**
@@ -218,12 +218,16 @@ export function Settings({
 }
 
 const RESULT_TEXT: Record<GmailResult, string> = {
-  connected: "Gmail is connected. Looking for your bookings now.",
+  connected: "Gmail is connected.",
   cancelled: "Gmail wasn't connected.",
   failed: "Gmail couldn't be connected. Try again.",
   unavailable: "Gmail can't be connected right now. Try again later.",
 };
 
+/**
+ * Apps Ability can use, one row each: Connect when it isn't, or a "Connected" pill whose menu
+ * disconnects it. Bookings found in Gmail show up in the chat, not here.
+ */
 function ConnectionsPage({
   gmail,
   result,
@@ -233,21 +237,8 @@ function ConnectionsPage({
   result: GmailResult | null;
   onChanged: () => Promise<void>;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const checking = !!gmail?.connected && !gmail.lastCheckedAt;
-
-  // The first check runs in the background; show its trips as soon as it is done.
-  useEffect(() => {
-    if (!checking) return;
-    const started = Date.now();
-    const timer = setInterval(() => {
-      if (Date.now() - started > 3 * 60 * 1000) clearInterval(timer);
-      else void onChanged();
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [checking, onChanged]);
 
   async function disconnect() {
     setBusy(true);
@@ -255,7 +246,6 @@ function ConnectionsPage({
     try {
       await api.disconnectGmail();
       await onChanged();
-      setConfirming(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "That didn't work. Try again.");
     } finally {
@@ -263,18 +253,11 @@ function ConnectionsPage({
     }
   }
 
-  const connect = (label: string) => (
-    <a className="btn btn-small" href={api.gmailConnectUrl()}>
-      {label}
-    </a>
-  );
-
   return (
     <>
       <p className="group-intro">
-        Connect Gmail and the assistant finds your flight and hotel bookings by itself, so it can
-        get you ready for check-in without being asked. It only reads mail. It never sends, changes
-        or deletes anything.
+        Connect Gmail and Ability finds your flight and hotel bookings by itself. It only reads
+        mail. It never sends, changes or deletes anything.
       </p>
       {result && (
         <p className={result === "connected" ? "group-note" : "form-error"} role="status">
@@ -288,87 +271,46 @@ function ConnectionsPage({
           </span>
           <span className="row-text">
             <span className="row-label">Gmail</span>
-            <span className="row-sub">
-              {gmail === null
-                ? " "
-                : gmail.connected
-                  ? (gmail.email ?? "Connected")
-                  : gmail.needsReconnect
-                    ? `${gmail.email ?? "Gmail"} · The connection stopped working`
-                    : "Not connected"}
-            </span>
-          </span>
-          {gmail && !gmail.connected && connect(gmail.needsReconnect ? "Reconnect" : "Connect")}
-        </div>
-        {gmail?.connected && (
-          <Detail
-            label="Last checked"
-            value={gmail.lastCheckedAt ? when(gmail.lastCheckedAt) : "Checking now…"}
-          />
-        )}
-      </div>
-      {gmail && (gmail.connected || gmail.trips.length > 0) && (
-        <>
-          <h3 className="group-title">Upcoming trips</h3>
-          <div className="group">
-            {gmail.trips.length === 0 ? (
-              <p className="row row-static row-empty">
-                {checking
-                  ? "Looking through your mail…"
-                  : "No upcoming flights or hotel stays found yet. New booking emails are picked up by themselves."}
-              </p>
-            ) : (
-              gmail.trips.map((t) => (
-                <div key={t.id} className="row row-static row-trip">
-                  <span className="row-text">
-                    <span className="row-label">{t.title}</span>
-                    <span className="row-sub">{tripDates(t.startsOn, t.endsOn)}</span>
-                    {t.bookings.map((b) => (
-                      <span key={b.id} className="row-sub">
-                        {bookingLine(b)}
-                      </span>
-                    ))}
-                  </span>
-                </div>
-              ))
+            {gmail && (gmail.email || gmail.needsReconnect) && (
+              <span className="row-sub">
+                {gmail.needsReconnect && !gmail.connected ? "Stopped working" : gmail.email}
+              </span>
             )}
-          </div>
-        </>
-      )}
-      {gmail?.connected && (
-        <div className="group">
-          {confirming ? (
-            <div className="row row-static row-confirm">
-              <p>
-                Disconnect Gmail? The assistant stops reading your mail. Trips it already found
-                stay.
-              </p>
-              <div className="row-actions">
-                <button
-                  type="button"
-                  className="btn btn-small btn-danger"
-                  disabled={busy}
-                  onClick={() => void disconnect()}
+          </span>
+          {gmail?.connected ? (
+            <Menu
+              label="Gmail connection"
+              className="row-menu"
+              buttonClassName="connected-pill"
+              trigger={
+                <>
+                  <span className="connected-dot" aria-hidden="true" />
+                  Connected
+                  <ChevronDownIcon />
+                </>
+              }
+            >
+              {(close) => (
+                <MenuItem
+                  danger
+                  onSelect={() => {
+                    close();
+                    if (!busy) void disconnect();
+                  }}
                 >
                   Disconnect
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-small btn-secondary"
-                  disabled={busy}
-                  onClick={() => setConfirming(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
+                </MenuItem>
+              )}
+            </Menu>
           ) : (
-            <button type="button" className="row row-danger" onClick={() => setConfirming(true)}>
-              Disconnect Gmail
-            </button>
+            gmail && (
+              <a className="btn btn-small" href={api.gmailConnectUrl()}>
+                {gmail.needsReconnect ? "Reconnect" : "Connect"}
+              </a>
+            )
           )}
         </div>
-      )}
+      </div>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -378,38 +320,18 @@ function ConnectionsPage({
   );
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** "3 Nov" or "3 Nov, 10:30" from a local date or time, without moving it to this time zone. */
-function localWhen(local: string): string {
-  const [, m, d] = local.slice(0, 10).split("-").map(Number) as [number, number, number];
-  return `${d} ${MONTHS[m - 1]}${local.length >= 16 ? `, ${local.slice(11, 16)}` : ""}`;
-}
-
-function tripDates(start: string | null, end: string | null): string {
-  if (!start) return "";
-  return end && end !== start ? `${localWhen(start)} to ${localWhen(end)}` : localWhen(start);
-}
-
-function bookingLine(b: Booking): string {
-  if (b.kind === "flight") {
-    const route = [b.fromCode ?? b.fromCity, b.toCode ?? b.toCity].filter(Boolean).join(" → ");
-    return [
-      `✈︎ ${b.flightNumber ?? b.airline ?? "Flight"}`,
-      route,
-      b.departAt ? localWhen(b.departAt) : null,
-      b.confirmation,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  }
-  return [
-    `⌂ ${b.name ?? "Hotel"}`,
-    b.checkIn ? tripDates(b.checkIn, b.checkOut) : null,
-    b.confirmation,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="m7 10 5 5 5-5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function VaultPage({
