@@ -279,6 +279,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   });
 
+  // The browser's time zone fills in one that was never set (accounts made before sign-in sent
+  // it), so trips can tell where home is. Signing in while travelling doesn't change a real one.
+  const fillTimezone = (userId: string, tz: unknown) =>
+    isTimezone(tz) && tz !== "UTC"
+      ? withUser(
+          sql,
+          userId,
+          (tx) => tx`UPDATE users SET timezone = ${tz} WHERE id = ${userId} AND timezone = 'UTC'`,
+        )
+      : Promise.resolve();
+
   app.post("/auth/sign-in", async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const email = typeof b.email === "string" ? b.email.trim().toLowerCase() : "";
@@ -292,6 +303,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       { timezone: string }[]
     >`SELECT timezone FROM users WHERE id = ${row.user_id}`;
     const timezone = isTimezone(b.timezone) ? b.timezone : (user?.timezone ?? "UTC");
+    await fillTimezone(row.user_id, b.timezone);
     setSession(reply, { userId: row.user_id, travilaUserId: row.travila_user_id }, timezone);
     return { ok: true };
   });
@@ -315,6 +327,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         { user_id: string; travila_user_id: string; onboarded: boolean; timezone: string }[]
       >`SELECT * FROM app_clerk_sign_in(${identity.clerkId}, ${identity.email},
           ${identity.name?.slice(0, 80) ?? null}, ${timezone}, ${allowNew})`;
+      await fillTimezone(row!.user_id, b.timezone);
       setSession(
         reply,
         { userId: row!.user_id, travilaUserId: row!.travila_user_id },

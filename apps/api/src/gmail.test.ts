@@ -139,7 +139,7 @@ beforeEach(() => {
 });
 
 let seq = 0;
-async function signUp(): Promise<string> {
+async function signUp(timezone?: string): Promise<string> {
   const res = await app.inject({
     method: "POST",
     url: "/auth/sign-up",
@@ -147,6 +147,7 @@ async function signUp(): Promise<string> {
       email: `gmail${Date.now()}_${++seq}@example.com`,
       password: "long-enough-pw",
       inviteCode: "invite-123",
+      timezone,
     },
   });
   expect(res.statusCode).toBe(200);
@@ -503,7 +504,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
   });
 
   it("keeps a round trip as one trip, whichever flight is saved first", async () => {
-    const cookie = await signUp();
+    const cookie = await signUp("America/Los_Angeles");
     const leg = (from: [string, string], to: [string, string], day: number, more = {}) =>
       flight({
         fromCode: from[0],
@@ -531,6 +532,95 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     expect(trips.map((t) => [t.title, t.bookings.length])).toEqual([
       ["Trip to Singapore", 2],
       ["Trip to Tokyo", 2],
+    ]);
+  });
+
+  it("starts a new trip from home, and keeps flights apart when home isn't known", async () => {
+    const flightOn = (from: string, to: string, toCity: string, day: number, no: string) =>
+      flight({
+        fromCode: from,
+        toCode: to,
+        toCity,
+        flightNumber: no,
+        departAt: future(day, "11:40"),
+        arriveAt: future(day + 1, "06:30"),
+      });
+    // Lives in Singapore: flying home from Toronto, then to Kuala Lumpur three weeks later.
+    const sg = await signUp("Asia/Singapore");
+    google.mail = [mailOf("home", 20), mailOf("kl", 10)];
+    reader.byMail.set("home", [flightOn("YYZ", "SIN", "Singapore", 20, "JL 35")]);
+    reader.byMail.set("kl", [flightOn("SIN", "KUL", "Kuala Lumpur", 41, "AK 706")]);
+    await connect(sg);
+    expect(((await status(sg)).trips as { title: string }[]).map((t) => t.title)).toEqual([
+      "Trip to Singapore",
+      "Trip to Kuala Lumpur",
+    ]);
+
+    // No time zone on the account: a flight a week later isn't joined on a guess.
+    const unknown = await signUp();
+    google.mail = [mailOf("out", 20), mailOf("back", 10)];
+    reader.byMail.set("out", [flightOn("SFO", "SIN", "Singapore", 20, "SQ 33")]);
+    reader.byMail.set("back", [flightOn("SIN", "SFO", "San Francisco", 27, "SQ 34")]);
+    await connect(unknown);
+    expect(((await status(unknown)).trips as unknown[]).length).toBe(2);
+  });
+
+  it("joins trips that were split in two before (migration 0015)", async () => {
+    await signUp();
+    const [user] = await sql!<
+      { id: string }[]
+    >`SELECT id FROM users ORDER BY created_at DESC LIMIT 1`;
+    const userId = user!.id;
+    const trip = async (title: string, legs: [string, string, string, string, string][]) => {
+      const [t] = await sql!<{ id: string }[]>`
+        INSERT INTO trips (user_id, status, title, starts_on, ends_on)
+        VALUES (${userId}, 'booked', ${title}, ${legs[0]![3].slice(0, 10)},
+                ${legs.at(-1)![4].slice(0, 10)}) RETURNING id`;
+      for (const [from, to, toCity, departAt, arriveAt] of legs) {
+        const d = { kind: "flight", fromCode: from, toCode: to, toCity, departAt, arriveAt };
+        await sql!`INSERT INTO trip_items (user_id, trip_id, kind, item_date, details, source)
+                   VALUES (${userId}, ${t!.id}, 'booking', ${departAt.slice(0, 10)},
+                           ${sql!.json(d as never)}, 'chat')`;
+      }
+      return t!.id;
+    };
+    // Legs of one journey saved at the same moment, each in its own trip.
+    await trip("Trip to Doha", [["BOM", "DOH", "Doha", "2026-10-23T04:25", "2026-10-23T05:30"]]);
+    await trip("Trip to Philadelphia", [
+      ["DOH", "PHL", "Philadelphia", "2026-10-23T07:40", "2026-10-23T14:30"],
+    ]);
+    // A flight home a week later stays apart: the clean-up can't tell where home is.
+    await trip("Trip to Singapore", [
+      ["SFO", "SIN", "Singapore", "2026-11-20T09:40", "2026-11-21T18:05"],
+    ]);
+    await trip("Trip to San Francisco", [
+      ["SIN", "SFO", "San Francisco", "2026-11-28T09:05", "2026-11-28T09:15"],
+    ]);
+    // Home again: a trip 10 days later stays a trip of its own.
+    await trip("Trip to Tokyo", [["SFO", "NRT", "Tokyo", "2026-12-08T11:05", "2026-12-09T14:30"]]);
+
+    const up = readFileSync(
+      new URL("../../../packages/db/migrations/0015_join_split_trips.up.sql", import.meta.url),
+      "utf8",
+    );
+    await sql!.begin((tx) => tx.unsafe(up));
+
+    const trips = await sql!<{ title: string; starts_on: Date; ends_on: Date; n: number }[]>`
+      SELECT t.title, t.starts_on, t.ends_on, count(i.*)::int AS n FROM trips t
+      JOIN trip_items i ON i.trip_id = t.id WHERE t.user_id = ${userId}
+      GROUP BY t.id ORDER BY t.starts_on`;
+    expect(
+      trips.map((t) => [
+        t.title,
+        t.starts_on.toISOString().slice(0, 10),
+        t.ends_on.toISOString().slice(0, 10),
+        t.n,
+      ]),
+    ).toEqual([
+      ["Trip to Philadelphia", "2026-10-23", "2026-10-23", 2],
+      ["Trip to Singapore", "2026-11-20", "2026-11-21", 1],
+      ["Trip to San Francisco", "2026-11-28", "2026-11-28", 1],
+      ["Trip to Tokyo", "2026-12-08", "2026-12-09", 1],
     ]);
   });
 

@@ -173,6 +173,21 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
       payload: { email, password: "long-enough-pw" },
     });
     expect(good.statusCode).toBe(200);
+
+    // An account made without a time zone gets the browser's at sign-in; a real one stays put
+    // when they sign in while travelling.
+    const zone = async () =>
+      (await sql!<{ timezone: string }[]>`SELECT timezone FROM users WHERE email = ${email}`)[0]!
+        .timezone;
+    expect(await zone()).toBe("UTC");
+    for (const timezone of ["Asia/Singapore", "Asia/Tokyo"]) {
+      await app.inject({
+        method: "POST",
+        url: "/auth/sign-in",
+        payload: { email, password: "long-enough-pw", timezone },
+      });
+    }
+    expect(await zone()).toBe("Asia/Singapore");
   });
 
   describe("Clerk sign-in", () => {
