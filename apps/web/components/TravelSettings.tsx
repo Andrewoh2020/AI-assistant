@@ -13,7 +13,8 @@ import { countries } from "@/lib/travel";
 /**
  * Settings › Travel details: what trip cards collected, given once and kept. Click straight into a
  * field to change it; it saves when you leave it (Enter saves too, Escape undoes). Passport and
- * other numbers stay hidden until Show; they live in the vault, and the assistant never sees them.
+ * other numbers are shown in full: they are the person's own, and a wrong one can cost a flight.
+ * They live in the vault, and the assistant never sees them.
  */
 
 type Edit = PrepAnswers & { frequentFlyer?: Record<string, string | null>; removeAnswer?: string };
@@ -26,9 +27,11 @@ export function TravelPage() {
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
-    api
-      .travelProfile()
-      .then((r) => setProfile(r.profile))
+    Promise.all([api.travelProfile(), api.revealTravelDocuments()])
+      .then(([r, d]) => {
+        setDocs(d.documents);
+        setProfile(r.profile);
+      })
       .catch(() => setError("Couldn't load your travel details."));
     return () => clearTimeout(flashTimer.current);
   }, []);
@@ -66,18 +69,6 @@ export function TravelPage() {
       setStatus(null);
       setError(err instanceof ApiError ? err.message : "That didn't save. Try again.");
       return false;
-    }
-  }
-
-  async function reveal() {
-    if (docs) return docs;
-    try {
-      const { documents } = await api.revealTravelDocuments();
-      setDocs(documents);
-      return documents;
-    } catch {
-      setError("Couldn't open your travel documents. Try again.");
-      return null;
     }
   }
 
@@ -125,10 +116,9 @@ export function TravelPage() {
       </div>
 
       <div className="group">
-        <SecretRow
+        <TextRow
           label="Passport number"
-          saved={p.hasPassportNumber}
-          reveal={async () => (await reveal())?.passportNumber ?? ""}
+          value={docs?.passportNumber ?? null}
           onSave={(v) => save({ passportNumber: v })}
         />
         <TextRow
@@ -137,18 +127,16 @@ export function TravelPage() {
           value={p.passportExpiry}
           onSave={(v) => save({ passportExpiry: v })}
         />
-        <SecretRow
+        <TextRow
           label="TSA PreCheck or Global Entry number"
-          saved={p.hasKnownTraveler}
-          reveal={async () => (await reveal())?.knownTravelerNumber ?? ""}
+          value={docs?.knownTravelerNumber ?? null}
           onSave={(v) => save({ knownTravelerNumber: v || null })}
         />
         {p.frequentFlyerAirlines.map((code) => (
-          <SecretRow
+          <TextRow
             key={code}
             label={`Frequent flyer number (${code})`}
-            saved
-            reveal={async () => (await reveal())?.frequentFlyer?.[code] ?? ""}
+            value={docs?.frequentFlyer?.[code] ?? null}
             onSave={(v) => save({ frequentFlyer: { [code]: v || null } })}
           />
         ))}
@@ -333,85 +321,5 @@ function CheckRow({
       <input type="checkbox" checked={value} onChange={(e) => void onSave(e.target.checked)} />
       {label}
     </label>
-  );
-}
-
-/** A number kept in the vault: dots until Show (or until you click in to change it). */
-function SecretRow({
-  label,
-  saved,
-  reveal,
-  onSave,
-}: {
-  label: string;
-  saved: boolean;
-  reveal: () => Promise<string>;
-  onSave: (value: string) => Promise<boolean>;
-}) {
-  const [shown, setShown] = useState<string | null>(null);
-  const [text, setText] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const undone = useRef(false);
-  const open = async () => {
-    if (shown !== null) return shown;
-    const v = saved ? await reveal() : "";
-    setShown(v);
-    setText((t) => t ?? v);
-    return v;
-  };
-  const visible = editing || (shown !== null && text !== null);
-  return (
-    <div className="row row-static row-secret">
-      <label className="row-text row-field">
-        <span className="row-sub">{label}</span>
-        <input
-          className={`field-inline ${visible ? "secret-value" : "secret-dots"}`}
-          value={visible ? (text ?? "") : saved ? "••••••••" : ""}
-          placeholder="Not added"
-          onFocus={() => {
-            setEditing(true);
-            void open();
-          }}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={async () => {
-            setEditing(false);
-            if (undone.current) {
-              undone.current = false;
-              return;
-            }
-            const current = shown ?? "";
-            const next = (text ?? "").trim();
-            if (next === current) return;
-            if (await onSave(next)) setShown(next);
-            else setText(current);
-          }}
-          onKeyDown={keys(() => {
-            undone.current = true;
-            setText(shown ?? "");
-          })}
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={40}
-        />
-      </label>
-      {saved && (
-        <span className="row-actions">
-          <button
-            type="button"
-            className="bsign-alt"
-            onClick={async () => {
-              if (shown !== null && !editing && text !== null) {
-                setShown(null);
-                setText(null);
-                return;
-              }
-              await open();
-            }}
-          >
-            {shown !== null && text !== null ? "Hide" : "Show"}
-          </button>
-        </span>
-      )}
-    </div>
   );
 }

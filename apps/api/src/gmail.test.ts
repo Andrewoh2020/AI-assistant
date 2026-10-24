@@ -502,6 +502,38 @@ describe.skipIf(!process.env.DATABASE_URL)("Gmail connector", () => {
     });
   });
 
+  it("keeps a round trip as one trip, whichever flight is saved first", async () => {
+    const cookie = await signUp();
+    const leg = (from: [string, string], to: [string, string], day: number, more = {}) =>
+      flight({
+        fromCode: from[0],
+        fromCity: from[1],
+        toCode: to[0],
+        toCity: to[1],
+        departAt: future(day, "09:40"),
+        arriveAt: future(day + 1, "18:05"),
+        ...more,
+      });
+    const sfo: [string, string] = ["SFO", "San Francisco"];
+    const sin: [string, string] = ["SIN", "Singapore"];
+    // The flight home arrives first; the outbound a week earlier joins it.
+    google.mail = [mailOf("home", 30), mailOf("out", 20), mailOf("next", 10)];
+    reader.byMail.set("home", [leg(sin, sfo, 27, { flightNumber: "SQ 34" })]);
+    reader.byMail.set("out", [leg(sfo, sin, 20, { flightNumber: "SQ 33" })]);
+    // Home again, a new trip 10 days later is a trip of its own.
+    reader.byMail.set("next", [
+      leg(sfo, ["NRT", "Tokyo"], 38, { flightNumber: "NH 7" }),
+      leg(["NRT", "Tokyo"], sfo, 45, { flightNumber: "NH 8" }),
+    ]);
+    await connect(cookie);
+
+    const trips = (await status(cookie)).trips as { title: string; bookings: unknown[] }[];
+    expect(trips.map((t) => [t.title, t.bookings.length])).toEqual([
+      ["Trip to Singapore", 2],
+      ["Trip to Tokyo", 2],
+    ]);
+  });
+
   it("cleans up codeshare copies and connection-named trips saved before (migration 0014)", async () => {
     await signUp();
     const [user] = await sql!<

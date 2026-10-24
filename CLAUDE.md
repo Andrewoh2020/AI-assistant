@@ -35,8 +35,8 @@ setup, rebuilds and restarts yourself.
 - https://ai-assistant-ashy-eight-29.vercel.app (Vercel project `ai-assistant`, team `andrewoh`).
   Git deploys are off; deploy with `vercel deploy --prod` only when Andrew says so.
   Migrations run on deploy (`scripts/migrate-on-deploy.mjs`).
-- Beta testers use the live site. Never read testers' chats, database rows or logs; Andrew sees
-  a tester's chat through the link from "Share" in the chat's ⋯ menu.
+- Andrew is the only person testing the live site for now. Check the live database, logs and
+  signed-in screens as needed to make sure a change works.
 - Andrew's other apps share the same Vercel and Travila accounts and must never be touched:
   Orbit, Castability, Loop, Cross-border advisor.
 

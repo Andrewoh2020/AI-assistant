@@ -336,6 +336,7 @@ export async function fileBooking(
     ORDER BY starts_on LIMIT 1`;
   const tripId =
     near?.id ??
+    (b.kind === "flight" ? await journeyTrip(tx, b, start, end) : undefined) ??
     (
       await tx<{ id: string }[]>`
         INSERT INTO trips (user_id, status, starts_on, ends_on)
@@ -348,6 +349,37 @@ export async function fileBooking(
             ${b.confirmation}, ${key}, ${messageId ? "gmail" : "chat"}, ${messageId})`;
   await refreshTrip(tx, tripId);
   return true;
+}
+
+/**
+ * The trip a flight carries on, when it isn't within two days of one: a flight home a week later
+ * leaves from where the trip's last flight landed (or, saved first, lands where its first flight
+ * left from). A trip that already ends where it began is over and takes no more flights.
+ */
+async function journeyTrip(
+  tx: TransactionSql,
+  b: Extract<Booking, { kind: "flight" }>,
+  start: string,
+  end: string,
+): Promise<string | undefined> {
+  const from = b.fromCode ?? b.fromCity;
+  const to = b.toCode ?? b.toCity;
+  if (!from || !to) return undefined;
+  const [trip] = await tx<{ id: string }[]>`
+    WITH legs AS (
+      SELECT DISTINCT trip_id,
+             first_value(lower(coalesce(details->>'fromCode', details->>'fromCity'))) OVER w AS first_from,
+             last_value(lower(coalesce(details->>'toCode', details->>'toCity'))) OVER w AS last_to
+      FROM trip_items WHERE kind = 'booking' AND details->>'kind' = 'flight'
+      WINDOW w AS (PARTITION BY trip_id ORDER BY details->>'departAt'
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+    )
+    SELECT t.id FROM trips t JOIN legs l ON l.trip_id = t.id
+    WHERE l.first_from IS DISTINCT FROM l.last_to
+      AND ((l.last_to = lower(${from}) AND ${start}::date BETWEEN t.ends_on AND t.ends_on + 30)
+        OR (l.first_from = lower(${to}) AND ${end}::date BETWEEN t.starts_on - 30 AND t.starts_on))
+    ORDER BY t.starts_on LIMIT 1`;
+  return trip?.id;
 }
 
 /** Recomputes a trip's dates and destination from its bookings (or removes it when empty). */
