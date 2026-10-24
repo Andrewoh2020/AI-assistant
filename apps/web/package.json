@@ -14,17 +14,18 @@
     "test": "echo 'web: no unit tests yet'"
   },
   "dependencies": {
+    "@ai-assistant/api": "workspace:*",
+    "@ai-assistant/api-client": "workspace:*",
+    "@ai-assistant/db": "workspace:*",
     "@ai-assistant/tokens": "workspace:*",
+    "@clerk/nextjs": "7.9.19",
+    "@vercel/functions": "^3.10.1",
+    "fastify": "^5.12.7",
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "@ai-assistant/api-client": "workspace:*",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "@ai-assistant/api": "workspace:*",
-    "@ai-assistant/db": "workspace:*",
-    "@vercel/functions": "^3.10.1",
-    "fastify": "^5.12.7",
     "server-only": "^0.0.1"
   },
   "devDependencies": {

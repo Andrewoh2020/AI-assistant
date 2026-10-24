@@ -12,7 +12,15 @@ export default function Home() {
 
   useEffect(() => {
     api
-      .listChats()
+      .me()
+      .then((me) => {
+        // Someone who left during the welcome questions picks up where they left off.
+        if (!me.onboarded) {
+          router.replace("/welcome");
+          return { chats: [] };
+        }
+        return api.listChats();
+      })
       .then(({ chats }) => {
         const main = chats.find((c) => c.kind === "main") ?? chats[0];
         if (main) router.replace(`/chat/${main.id}`);

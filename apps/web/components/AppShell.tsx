@@ -11,6 +11,7 @@ import {
   type MessageView,
   type RunView,
 } from "@ai-assistant/api-client";
+import { useClerk } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -48,6 +49,7 @@ const drafts = new Map<string, string>();
 
 export function AppShell({ chatId }: { chatId: string }) {
   const router = useRouter();
+  const clerk = useClerk();
   const [me, setMe] = useState<Me | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chat, setChat] = useState<ChatSummary | null>(null);
@@ -532,6 +534,7 @@ export function AppShell({ chatId }: { chatId: string }) {
 
   async function signOut() {
     await api.signOut().catch(() => {});
+    await clerk.signOut().catch(() => {});
     router.replace("/sign-in");
   }
 

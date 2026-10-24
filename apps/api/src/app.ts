@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import {
   hashPassword,
   signSession,
+  verifyIdentity,
   verifyPassword,
   verifySession,
   type SessionPayload,
@@ -88,6 +89,8 @@ import {
 import { MANAGERS, readExport } from "./vault-import.js";
 
 const COOKIE = "aia_session";
+/** Set by an invite link (/join/<code>); lets a new person create an account. */
+const INVITE_COOKIE = "aia_invite";
 const SESSION_DAYS = 30;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -120,6 +123,13 @@ declare module "fastify" {
   interface FastifyRequest {
     session: Session | null;
   }
+}
+
+/** Compares two strings without leaking, through timing, how much of them matched. */
+function sameText(a: string, b: string): boolean {
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 function isTimezone(tz: unknown): tz is string {
@@ -279,6 +289,42 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { ok: true };
   });
 
+  // Clerk sign-in. The website checks the Clerk session and passes who it is in X-Clerk-Identity,
+  // signed with the session secret; here we find or create the user and start our own session.
+  app.post("/auth/clerk", async (req, reply) => {
+    const header = req.headers["x-clerk-identity"];
+    const identity = verifyIdentity(
+      typeof header === "string" ? header : undefined,
+      config.sessionSecret,
+    );
+    if (!identity) return reply.code(401).send({ error: "Please sign in." });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const invite = req.cookies?.[INVITE_COOKIE];
+    const allowNew =
+      config.openSignup || (!!config.signupCode && !!invite && sameText(invite, config.signupCode));
+    const timezone = isTimezone(b.timezone) ? b.timezone : "UTC";
+    try {
+      const [row] = await sql<
+        { user_id: string; travila_user_id: string; onboarded: boolean; timezone: string }[]
+      >`SELECT * FROM app_clerk_sign_in(${identity.clerkId}, ${identity.email},
+          ${identity.name?.slice(0, 80) ?? null}, ${timezone}, ${allowNew})`;
+      setSession(
+        reply,
+        { userId: row!.user_id, travilaUserId: row!.travila_user_id },
+        isTimezone(b.timezone) ? b.timezone : row!.timezone,
+      );
+      reply.clearCookie(INVITE_COOKIE, { path: "/" });
+      return { ok: true, needsOnboarding: !row!.onboarded };
+    } catch (err) {
+      if ((err as { code?: string }).code === "42501") {
+        return reply.code(403).send({
+          error: "This beta is invite-only for now. Ask for an invite link to join.",
+        });
+      }
+      throw err;
+    }
+  });
+
   app.post("/auth/sign-out", async (_req, reply) => {
     reply.clearCookie(COOKIE, { path: "/" });
     return { ok: true };
@@ -290,14 +336,16 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const [me] = await withUser(
       sql,
       s.userId,
-      (tx) => tx<{ display_name: string | null; email: string | null }[]>`
-      SELECT display_name, email FROM users WHERE id = ${s.userId}`,
+      (tx) => tx<{ display_name: string | null; email: string | null; onboarded: boolean }[]>`
+      SELECT display_name, email, onboarded_at IS NOT NULL AS onboarded
+        FROM users WHERE id = ${s.userId}`,
     );
     return {
       userId: s.userId,
       displayName: me?.display_name ?? null,
       email: me?.email ?? null,
       timezone: s.timezone,
+      onboarded: me?.onboarded ?? true,
     };
   });
 
@@ -1035,6 +1083,39 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         await afterPrep(flightDeps, s.userId, id, {});
       }
       return { profile };
+    },
+  );
+
+  // The welcome questions after someone's first sign-in. Every answer is optional; finishing or
+  // skipping marks them onboarded so the questions never come back. A birthday goes into the
+  // travel details, where flight check-in finds it without asking again.
+  app.post<{ Body: { displayName?: string; dateOfBirth?: string } }>(
+    "/onboarding",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: { displayName: str(80), dateOfBirth: str(10) },
+        },
+      },
+    },
+    async (req, reply) => {
+      const s = requireSession(req, reply);
+      if (!s) return;
+      const b = req.body ?? {};
+      if (b.dateOfBirth) {
+        await editProfile(sql, vaultKey, s.userId, { dateOfBirth: b.dateOfBirth }, today());
+      }
+      const name = b.displayName?.trim() || null;
+      await withUser(
+        sql,
+        s.userId,
+        (tx) => tx`UPDATE users SET display_name = coalesce(${name}, display_name),
+                     onboarded_at = coalesce(onboarded_at, now())
+                   WHERE id = ${s.userId}`,
+      );
+      return { ok: true };
     },
   );
 

@@ -11,8 +11,10 @@ export interface Config {
   sessionSecret: string;
   /** The vault's master key (32 bytes, base64). Empty: derived from the session secret. */
   vaultMasterKey: string;
-  /** People need this code to create an account. Empty disables sign-up. */
+  /** The invite code: an invite link (/join/<code>) lets someone create an account. */
   signupCode: string;
+  /** Anyone can create an account, no invite needed. */
+  openSignup: boolean;
   secureCookies: boolean;
   /** The site's own address, like "https://example.com"; empty: taken from each request. */
   publicUrl: string;
@@ -43,6 +45,7 @@ export function loadConfig(env = process.env): Config {
     sessionSecret: sessionSecret || "dev-only-session-secret-change-me-0000",
     vaultMasterKey: env.VAULT_MASTER_KEY ?? "",
     signupCode: env.SIGNUP_CODE ?? "",
+    openSignup: env.OPEN_SIGNUP === "1",
     secureCookies: hosted,
     publicUrl: (env.PUBLIC_URL ?? "").replace(/\/+$/, ""),
     flightAwareKey: env.FLIGHTAWARE_API_KEY ?? "",

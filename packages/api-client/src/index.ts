@@ -425,6 +425,8 @@ export interface Me {
   displayName: string | null;
   email: string | null;
   timezone: string;
+  /** False until the welcome questions after the first sign-in are answered or skipped. */
+  onboarded: boolean;
 }
 
 export const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
@@ -465,6 +467,11 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     }) => call<{ ok: true }>("POST", "/auth/sign-up", input),
     signIn: (input: { email: string; password: string; timezone: string }) =>
       call<{ ok: true }>("POST", "/auth/sign-in", input),
+    /** Turns a Clerk sign-in (Google or an emailed code) into a session with this app. */
+    clerkSignIn: (input: { timezone: string }) =>
+      call<{ ok: true; needsOnboarding: boolean }>("POST", "/auth/clerk", input),
+    finishOnboarding: (input: { displayName?: string; dateOfBirth?: string }) =>
+      call<{ ok: true }>("POST", "/onboarding", input),
     signOut: () => call<{ ok: true }>("POST", "/auth/sign-out", {}),
     me: () => call<Me>("GET", "/me"),
     listChats: () => call<{ chats: ChatSummary[] }>("GET", "/chats"),
