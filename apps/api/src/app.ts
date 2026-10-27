@@ -88,6 +88,7 @@ import {
   vaultKeyFrom,
 } from "./vault.js";
 import { MANAGERS, readExport } from "./vault-import.js";
+import { registerPractice } from "./practice.js";
 
 const COOKIE = "aia_session";
 /** Set by an invite link (/join/<code>); lets a new person create an account. */
@@ -1183,15 +1184,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { documents: await revealDocuments(sql, vaultKey, s.userId) };
   });
 
-  // The scheduler: every flight that is due, for everyone, plus new booking emails.
+  // The scheduler: every flight that is due, for everyone, plus new booking emails (with `mail`).
   let ticking = false;
-  const tick = async () => {
+  const tick = async (mail = true) => {
     if (ticking) return;
     ticking = true;
     try {
-      const users = await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(
-        () => [],
-      );
+      const users = mail
+        ? await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(() => [])
+        : [];
       for (const u of users) {
         await syncIfDue(gmailDeps, u.user_id);
         await planFlights(flightDeps, u.user_id).catch((err) => app.log.error(err));
@@ -1202,6 +1203,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   };
 
+  // Ability Practice Air, the pretend airline for trying check-in without a real flight.
+  registerPractice(app, { sql, secret: config.sessionSecret, vaultKey, now: deps.now });
+
   // Vercel Cron calls this with "Authorization: Bearer <CRON_SECRET>".
   app.get("/cron/flights", async (req, reply) => {
     const want = Buffer.from(`Bearer ${config.cronSecret}`);
@@ -1209,7 +1213,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!config.cronSecret || got.length !== want.length || !timingSafeEqual(got, want)) {
       return reply.code(401).send({ error: "Not allowed." });
     }
-    await tick();
+    // Called every 5 minutes, so a check-in moves on with the app closed; a call with no flight
+    // due makes no paid calls. Booking emails are looked for once an hour (and when the app opens).
+    await tick((deps.now?.() ?? new Date()).getUTCMinutes() < 5);
     return { ok: true };
   });
 

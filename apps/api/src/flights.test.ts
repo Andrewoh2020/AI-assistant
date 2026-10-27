@@ -317,7 +317,7 @@ async function bookTrip(userId: string, hours: number) {
         city: "Singapore",
         address: "10 Bayfront Ave",
         checkIn: arriveDay,
-        checkOut: arriveDay.slice(0, 8) + String(Number(arriveDay.slice(8)) + 1).padStart(2, "0"),
+        checkOut: new Date(Date.parse(arriveDay) + 24 * H).toISOString().slice(0, 10),
         confirmation: "MBS1",
       },
       null,
@@ -833,5 +833,150 @@ describe.skipIf(!process.env.DATABASE_URL)("a flight from booking to landing", (
       now: () => now,
     });
     expect(n).toBeGreaterThan(0);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("Ability Practice Air", () => {
+  /** A practice flight from Singapore to Kuala Lumpur leaving in `hours`. */
+  async function bookPractice(userId: string, hours: number, confirmation = "PRAC01") {
+    const depart = new Date(now.getTime() + hours * H);
+    await withUser(sql!, userId, (tx) =>
+      fileBooking(
+        tx,
+        userId,
+        {
+          kind: "flight",
+          status: "confirmed",
+          airline: "Ability Practice Air",
+          flightNumber: "ZZ 101",
+          fromCode: "SIN",
+          fromCity: "Singapore",
+          toCode: "KUL",
+          toCity: "Kuala Lumpur",
+          departAt: local(depart, "SIN"),
+          arriveAt: local(new Date(depart.getTime() + H), "KUL"),
+          confirmation,
+        },
+        null,
+      ),
+    );
+    await planFlights({ sql: sql!, now: () => now }, userId);
+    return depart;
+  }
+
+  const lookup = (reference: string, lastName: string) =>
+    app.inject({
+      method: "POST",
+      url: "/practice-air/lookup",
+      payload: { reference, lastName },
+    });
+
+  it("sends the check-in browser to the practice airline, which checks what it typed", async () => {
+    process.env.PUBLIC_URL = "https://ability.example";
+    try {
+      const { cookie, userId } = await signUp();
+      await bookPractice(userId, 10);
+      const [f] = await flights(cookie);
+      expect(f!.airlineName).toBe("Ability Practice Air");
+      expect(f!.checkin.site).toBe("ability.example");
+      browser.scripts.push({ polls: 50, result: "" });
+      const saved = await app.inject({
+        method: "POST",
+        url: `/flights/${f!.id}/prep`,
+        headers: { cookie },
+        payload: prep,
+      });
+      expect(saved.statusCode).toBe(200);
+      await settle();
+      await tick();
+      // Check-in is open, so the browser starts straight away, on the practice airline's own page.
+      expect(browser.runs.size).toBe(1);
+      const [run] = [...browser.runs.values()];
+      expect(run!.input.task).toContain("Start at: https://ability.example/practice-air");
+      expect(run!.input.secrets).toEqual([
+        { alias: "passport_number", value: "X1234567", allowedDomains: ["ability.example"] },
+      ]);
+
+      // The airline finds the booking only with its reference and the last name on it.
+      expect((await lookup("PRAC01", "Smith")).statusCode).toBe(400);
+      const found = await lookup(" prac01 ", "lee");
+      expect(found.statusCode).toBe(200);
+      const booking = found.json();
+      expect(booking).toMatchObject({
+        reference: "PRAC01",
+        checkin: "open",
+        flight: { number: "ZZ 101", fromCode: "SIN", toCode: "KUL" },
+        checkedIn: null,
+      });
+
+      const checkIn = (extra: Record<string, unknown>) =>
+        app.inject({
+          method: "POST",
+          url: "/practice-air/check-in",
+          payload: {
+            token: booking.token,
+            firstName: "Ann",
+            lastName: "Lee",
+            dateOfBirth: "1990-04-12",
+            gender: "female",
+            nationality: "United States",
+            passportNumber: "x123 4567",
+            passportCountry: "United States",
+            passportExpiry: "2031-01-10",
+            restrictedItems: true,
+            seat: null,
+            extras: [],
+            ...extra,
+          },
+        });
+      // Insurance left ticked, or a paid seat, goes to payment, which this airline never takes.
+      const ins = await checkIn({ extras: ["insurance"] });
+      expect(ins.statusCode, ins.body).toBe(402);
+      const hot = ["1A", "1B", "2A", "2B", "3A", "3B", "4A", "4B"].find(
+        (x) => !booking.taken.includes(x),
+      );
+      expect((await checkIn({ seat: hot })).statusCode).toBe(402);
+      if (booking.taken[0])
+        expect((await checkIn({ seat: booking.taken[0] })).statusCode).toBe(400);
+      expect((await checkIn({ restrictedItems: false })).statusCode).toBe(400);
+      expect((await checkIn({ token: "forged.token" })).statusCode).toBe(400);
+      const done = await checkIn({});
+      expect(done.statusCode).toBe(200);
+      expect(done.json().seat).toMatch(/^\d+E$/);
+      const [kept] = await sql!<{ details: Record<string, unknown> }[]>`
+        SELECT details FROM practice_checkins WHERE user_id = ${userId}`;
+      expect(kept!.details).toMatchObject({ passportMatched: true, lastName: "Lee" });
+      expect(JSON.stringify(kept)).not.toMatch(/X1234567|x123 4567/i);
+
+      // The website's /api/... is the backend's /...
+      const pass = await app.inject({
+        method: "GET",
+        url: done.json().boardingPass.replace(/^\/api/, ""),
+      });
+      expect(pass.statusCode, pass.body.slice(0, 300)).toBe(200);
+      expect(pass.headers["content-type"]).toBe("application/pdf");
+      expect(pass.body.startsWith("%PDF-1.4")).toBe(true);
+      expect(pass.body).toContain("LEE/ANN");
+      expect(pass.body).toContain("ZZ 101");
+      expect((await lookup("PRAC01", "Lee")).json().checkedIn).toMatchObject({
+        seat: done.json().seat,
+      });
+    } finally {
+      delete process.env.PUBLIC_URL;
+    }
+  });
+
+  it("says when check-in opens, like a real airline", async () => {
+    const { cookie, userId } = await signUp();
+    await bookPractice(userId, 30, "PRAC02");
+    await app.inject({
+      method: "POST",
+      url: `/flights/${(await flights(cookie))[0]!.id}/prep`,
+      headers: { cookie },
+      payload: prep,
+    });
+    const found = (await lookup("PRAC02", "Lee")).json();
+    expect(found.checkin).toBe("not_open");
+    expect(found.opensLocal).toBeTruthy();
   });
 });
