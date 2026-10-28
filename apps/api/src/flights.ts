@@ -133,9 +133,13 @@ export function airlineSite(
   return AIRLINES[code] ?? null;
 }
 
-/** Where this app is reachable from the internet (the browser runs elsewhere), or null. */
+/**
+ * Where this app is reachable from the internet (the browser runs elsewhere), or null.
+ * PRACTICE_AIR_URL is for trying it on a computer, through a tunnel to it.
+ */
 function practiceBase(): string | null {
   const url =
+    process.env.PRACTICE_AIR_URL ||
     process.env.PUBLIC_URL ||
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
       ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`

@@ -1219,24 +1219,30 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { ok: true };
   });
 
-  // On a computer that stays on: wake when the next flight needs something, and at least every
-  // `scheduleEveryMs` to look for new booking emails. A wake-up with nothing due costs nothing.
+  // On a computer that stays on: wake when the next flight needs something, and at least once a
+  // minute (a flight that gets due meanwhile, like one whose details were just added, isn't left
+  // waiting). New booking emails are looked for every `scheduleEveryMs`. A wake-up with nothing
+  // due is one database query and no paid calls.
   if (deps.scheduleEveryMs) {
     const most = deps.scheduleEveryMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
+    let mailedAt = 0;
     const arm = async () => {
       if (closed) return;
-      let wait = most;
+      let wait = Math.min(most, 60_000);
       try {
         const [row] = await sql<{ at: Date | null }[]>`SELECT app_next_flight_due() AS at`;
         const now = (deps.now?.() ?? new Date()).getTime();
-        if (row?.at) wait = Math.min(most, Math.max(5000, new Date(row.at).getTime() - now));
+        if (row?.at) wait = Math.min(wait, Math.max(5000, new Date(row.at).getTime() - now));
       } catch (err) {
         app.log.error(err);
       }
       timer = setTimeout(() => {
-        void tick()
+        const now = (deps.now?.() ?? new Date()).getTime();
+        const mail = now - mailedAt >= most;
+        if (mail) mailedAt = now;
+        void tick(mail)
           .catch((err) => app.log.error(err))
           .finally(() => void arm());
       }, wait);
