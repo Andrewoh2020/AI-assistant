@@ -415,8 +415,9 @@ export async function runTool(
         await tx`SELECT pg_advisory_xact_lock(hashtext(${`${ctx.runId}:gmail`}))`;
         const [state] = await tx<{ connected: boolean; offered: boolean }[]>`
           SELECT
-            EXISTS (SELECT 1 FROM connector_accounts
-                    WHERE provider = 'gmail' AND status = 'connected') AS connected,
+            (SELECT count(*) FROM connector_accounts
+             WHERE provider IN ('gmail', 'google_calendar') AND status = 'connected') = 2
+              AS connected,
             EXISTS (SELECT 1 FROM messages m JOIN runs r ON r.id = ${ctx.runId}
                     WHERE m.chat_id = r.chat_id AND m.created_at >= r.created_at
                       AND m.parts @> '[{"type": "card", "card": {"kind": "gmail"}}]') AS offered`;
@@ -427,11 +428,13 @@ export async function runTool(
       });
       await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
       if (outcome === "connected")
-        return { already_connected: "Gmail is already connected; don't offer it." };
+        return {
+          already_connected: "Gmail and Google Calendar are both connected; don't offer them.",
+        };
       if (outcome === "offered") return { shown: "Already offered in this reply." };
       return {
         shown:
-          "A Connect Gmail card is now just above your reply. Don't repeat the offer in your reply.",
+          "A card to connect Gmail and Google Calendar is now just above your reply. Don't repeat the offer in your reply.",
       };
     }
 

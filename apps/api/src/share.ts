@@ -69,6 +69,7 @@ const NEEDS: Partial<Record<FlightView["prep"]["required"][number], string>> = {
   frequentFlyer: "frequent flyer number",
   seatStyle: "seat style",
   homeAddress: "home address",
+  bookingRef: "booking reference",
 };
 
 /** One flight's trip card in a line: check-in state and what it still needs. */

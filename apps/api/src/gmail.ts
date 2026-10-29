@@ -107,7 +107,10 @@ interface ConnectorRow {
   sync_started_at: Date | null;
 }
 
-export async function gmailStatus(deps: GmailDeps, userId: string): Promise<GmailStatus> {
+export async function gmailStatus(
+  deps: GmailDeps,
+  userId: string,
+): Promise<Omit<GmailStatus, "calendar">> {
   const [row] = await withUser(
     deps.sql,
     userId,
@@ -275,7 +278,7 @@ const startOf = (b: Booking) =>
 const endOf = (b: Booking) =>
   b.kind === "flight" ? (b.arriveAt?.slice(0, 10) ?? startOf(b)) : (b.checkOut ?? b.checkIn);
 
-function isPast(b: Booking, now = new Date()) {
+export function isPast(b: Booking, now = new Date()) {
   const end = endOf(b);
   return !end || end < new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
 }
@@ -283,28 +286,54 @@ function isPast(b: Booking, now = new Date()) {
 /**
  * Files one booking into a trip: bookings within two days of an existing trip join it; others
  * start a new one. A cancelled booking is removed. Returns true when the booking is new.
+ * `messageId` is the email (or calendar event) it came from.
  */
 export async function fileBooking(
   tx: TransactionSql,
   userId: string,
   b: FoundBooking,
   messageId: string | null,
+  source: "gmail" | "calendar" | "chat" = messageId ? "gmail" : "chat",
 ): Promise<boolean> {
   const key = dedupeKey(b);
   const { status, ...details } = b;
   // Bookings saved at once (parallel tool calls) are filed one at a time, so the same booking isn't
   // inserted twice and the legs of one journey land in one trip instead of a trip each.
   await tx`SELECT pg_advisory_xact_lock(hashtext(${userId + ":trips"}))`;
-  type Existing = { id: string; trip_id: string; details: Partial<Booking> | null };
+  type Existing = {
+    id: string;
+    trip_id: string;
+    details: Partial<Booking> | null;
+    source: string | null;
+  };
   let [existing] = await tx<Existing[]>`
-    SELECT id, trip_id, details FROM trip_items WHERE dedupe_key = ${key}`;
+    SELECT id, trip_id, details, source FROM trip_items WHERE dedupe_key = ${key}`;
   if (!existing && b.kind === "flight" && b.flightNumber) {
     // A new departure time changes the key: find the flight by any of its numbers that day.
     [existing] = await tx<Existing[]>`
-      SELECT id, trip_id, details FROM trip_items
+      SELECT id, trip_id, details, source FROM trip_items
       WHERE kind = 'booking' AND details->>'kind' = 'flight' AND item_date = ${startOf(b)}
         AND (details->>'flightNumber' = ${b.flightNumber}
              OR jsonb_exists(coalesce(details->'codeshares', '[]'), ${b.flightNumber}))
+      LIMIT 1`;
+  }
+  if (
+    !existing &&
+    source === "calendar" &&
+    b.kind === "flight" &&
+    b.fromCode &&
+    b.toCode &&
+    b.departAt
+  ) {
+    // A calendar event someone typed can be a few minutes off, or under a codeshare number: the
+    // same route leaving within an hour is the same flight.
+    [existing] = await tx<Existing[]>`
+      SELECT id, trip_id, details, source FROM trip_items
+      WHERE kind = 'booking' AND details->>'kind' = 'flight'
+        AND details->>'fromCode' = ${b.fromCode} AND details->>'toCode' = ${b.toCode}
+        AND abs(extract(epoch FROM (details->>'departAt')::timestamp - ${b.departAt}::text::timestamp))
+            <= 3600
+      ORDER BY abs(extract(epoch FROM (details->>'departAt')::timestamp - ${b.departAt}::text::timestamp))
       LIMIT 1`;
   }
   if (status === "cancelled") {
@@ -316,6 +345,22 @@ export async function fileBooking(
   }
   const start = startOf(b)!;
   const end = endOf(b) ?? start;
+  if (existing && source === "calendar" && existing.source !== "calendar") {
+    // A calendar event for a flight already known from an email or the chat only fills gaps (like
+    // a missing booking reference): a time typed into a calendar is less sure than the airline's.
+    const old = (existing.details ?? {}) as Partial<Booking>;
+    const gaps = Object.fromEntries(
+      Object.entries(details).filter(([k, v]) => v != null && old[k as keyof typeof old] == null),
+    );
+    if (Object.keys(gaps).length) {
+      const merged = { ...old, ...gaps } as Partial<Booking>;
+      await tx`UPDATE trip_items SET details = ${tx.json(merged as never)},
+                 confirmation_ref = ${merged.confirmation ?? null}, updated_at = now()
+               WHERE id = ${existing.id}`;
+      await refreshTrip(tx, existing.trip_id);
+    }
+    return false;
+  }
   if (existing) {
     // Saved again (a change email, the model saving a flight twice with fewer details, or the
     // same flight under a codeshare number): keep what was already known, like the booking
@@ -383,7 +428,7 @@ export async function fileBooking(
     INSERT INTO trip_items (user_id, trip_id, kind, item_date, details, confirmation_ref,
                             dedupe_key, source, source_message_id)
     VALUES (${userId}, ${tripId}, 'booking', ${start}, ${tx.json(details as never)},
-            ${b.confirmation}, ${key}, ${messageId ? "gmail" : "chat"}, ${messageId})`;
+            ${b.confirmation}, ${key}, ${source}, ${messageId})`;
   await refreshTrip(tx, tripId);
   return true;
 }
@@ -546,19 +591,30 @@ export function describeBooking(b: Booking): string {
 }
 
 /** Posts a short note in the Main chat about bookings it just found. */
-async function tellMainChat(tx: TransactionSql, userId: string, found: Booking[], first: boolean) {
+export async function tellMainChat(
+  tx: TransactionSql,
+  userId: string,
+  found: Booking[],
+  first: boolean,
+  from: "gmail" | "calendar" = "gmail",
+) {
   const [main] = await tx<{ id: string }[]>`SELECT id FROM chats WHERE kind = 'main'`;
   if (!main) return;
   const sorted = [...found].sort((a, b) => (startOf(a) ?? "").localeCompare(startOf(b) ?? ""));
   const lines = sorted.slice(0, 8).map((b) => `- ${describeBooking(b)}`);
   if (sorted.length > 8) lines.push(`- and ${sorted.length - 8} more`);
-  const lead = first
-    ? found.length === 1
-      ? "I checked your Gmail and found an upcoming booking:"
-      : `I checked your Gmail and found ${found.length} upcoming bookings:`
-    : found.length === 1
-      ? "A new booking just arrived in your Gmail:"
-      : `${found.length} new bookings just arrived in your Gmail:`;
+  const lead =
+    from === "calendar"
+      ? found.length === 1
+        ? "I found a flight in your Google Calendar:"
+        : `I found ${found.length} flights in your Google Calendar:`
+      : first
+        ? found.length === 1
+          ? "I checked your Gmail and found an upcoming booking:"
+          : `I checked your Gmail and found ${found.length} upcoming bookings:`
+        : found.length === 1
+          ? "A new booking just arrived in your Gmail:"
+          : `${found.length} new bookings just arrived in your Gmail:`;
   const text = `${lead}\n\n${lines.join("\n")}\n\nI've added ${found.length === 1 ? "it" : "them"} to your trips. Ask me about your trips any time.`;
   await tx`INSERT INTO messages (user_id, chat_id, role, parts, origin)
            VALUES (${userId}, ${main.id}, 'assistant',

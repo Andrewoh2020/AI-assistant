@@ -51,6 +51,10 @@ setup, rebuilds and restarts yourself.
   are skipped unless `DATABASE_URL` points there.
 - Flights are matched by route and departure time, not flight number: codeshare emails give the
   same flight different numbers (kept as `codeshares`).
+- Google Calendar is a second Pipedream app (`google_calendar`), connected next to Gmail; the Gmail
+  connection can't be widened to include it. Nothing to set up at Google (docs/calendar-plan.html).
+- postgres.js turns a `${text}::timestamp` parameter into a Date and shifts it by the computer's
+  time zone. Cast local airport times as `${t}::text::timestamp`.
 - Existing chats only get changed assistant instructions or tools when `PROFILE_VERSION` in
   `packages/agent` changes. Bump it with every prompt or tool change (a test checks this), and
   test with a chat that already existed, not only a new one.

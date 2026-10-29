@@ -2,6 +2,7 @@
 
 import {
   ApiError,
+  type CalendarStatus,
   type GmailStatus,
   type VaultEvent,
   type VaultLogin,
@@ -31,8 +32,11 @@ type Page =
   | { name: "connections" }
   | { name: "travel" };
 
-/** How connecting Gmail went, from Google's sign-in coming back to the app. */
-export type GmailResult = "connected" | "cancelled" | "failed" | "unavailable";
+/** How connecting Gmail or Google Calendar went, from Google's sign-in coming back to the app. */
+export interface GmailResult {
+  app: "gmail" | "calendar";
+  outcome: "connected" | "cancelled" | "failed" | "unavailable";
+}
 
 export function Settings({
   start = "home",
@@ -161,11 +165,15 @@ export function Settings({
                   icon={<MailIcon />}
                   label="Connected accounts"
                   sub={
-                    gmail?.connected
-                      ? "Gmail connected"
-                      : gmail?.needsReconnect
-                        ? "Gmail needs reconnecting"
-                        : "Gmail"
+                    gmail?.needsReconnect || gmail?.calendar.needsReconnect
+                      ? "Needs reconnecting"
+                      : gmail?.connected && gmail.calendar.connected
+                        ? "Gmail and Google Calendar connected"
+                        : gmail?.connected
+                          ? "Gmail connected"
+                          : gmail?.calendar.connected
+                            ? "Google Calendar connected"
+                            : "Gmail, Google Calendar"
                   }
                   onClick={() => setPage({ name: "connections" })}
                 />
@@ -217,16 +225,17 @@ export function Settings({
   );
 }
 
-const RESULT_TEXT: Record<GmailResult, string> = {
-  connected: "Gmail is connected.",
-  cancelled: "Gmail wasn't connected.",
-  failed: "Gmail couldn't be connected. Try again.",
-  unavailable: "Gmail can't be connected right now. Try again later.",
-};
+function resultText({ app, outcome }: GmailResult): string {
+  const name = app === "calendar" ? "Google Calendar" : "Gmail";
+  if (outcome === "connected") return `${name} is connected.`;
+  if (outcome === "cancelled") return `${name} wasn't connected.`;
+  if (outcome === "failed") return `${name} couldn't be connected. Try again.`;
+  return `${name} can't be connected right now. Try again later.`;
+}
 
 /**
  * Apps Ability can use, one row each: Connect when it isn't, or a "Connected" pill whose menu
- * disconnects it. Bookings found in Gmail show up in the chat, not here.
+ * disconnects it. Bookings found in Gmail or the calendar show up in the chat, not here.
  */
 function ConnectionsPage({
   gmail,
@@ -240,11 +249,12 @@ function ConnectionsPage({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function disconnect() {
+  async function disconnect(app: "gmail" | "calendar") {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      await api.disconnectGmail();
+      await (app === "gmail" ? api.disconnectGmail() : api.disconnectCalendar());
       await onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "That didn't work. Try again.");
@@ -256,60 +266,29 @@ function ConnectionsPage({
   return (
     <>
       <p className="group-intro">
-        Connect Gmail and Ability finds your flight and hotel bookings by itself. It only reads
-        mail. It never sends, changes or deletes anything.
+        Connect Gmail and Google Calendar and Ability finds your flights and hotel stays by itself.
+        It only reads them. It never sends, changes or deletes anything.
       </p>
       {result && (
-        <p className={result === "connected" ? "group-note" : "form-error"} role="status">
-          {RESULT_TEXT[result]}
+        <p className={result.outcome === "connected" ? "group-note" : "form-error"} role="status">
+          {resultText(result)}
         </p>
       )}
       <div className="group">
-        <div className="row row-static row-account">
-          <span className="row-icon" aria-hidden="true">
-            <MailIcon />
-          </span>
-          <span className="row-text">
-            <span className="row-label">Gmail</span>
-            {gmail && (gmail.email || gmail.needsReconnect) && (
-              <span className="row-sub">
-                {gmail.needsReconnect && !gmail.connected ? "Stopped working" : gmail.email}
-              </span>
-            )}
-          </span>
-          {gmail?.connected ? (
-            <Menu
-              label="Gmail connection"
-              className="row-menu"
-              buttonClassName="connected-pill"
-              trigger={
-                <>
-                  <span className="connected-dot" aria-hidden="true" />
-                  Connected
-                  <ChevronDownIcon />
-                </>
-              }
-            >
-              {(close) => (
-                <MenuItem
-                  danger
-                  onSelect={() => {
-                    close();
-                    if (!busy) void disconnect();
-                  }}
-                >
-                  Disconnect
-                </MenuItem>
-              )}
-            </Menu>
-          ) : (
-            gmail && (
-              <a className="btn btn-small" href={api.gmailConnectUrl()}>
-                {gmail.needsReconnect ? "Reconnect" : "Connect"}
-              </a>
-            )
-          )}
-        </div>
+        <AccountRow
+          label="Gmail"
+          icon={<MailIcon />}
+          status={gmail}
+          connectUrl={api.gmailConnectUrl()}
+          onDisconnect={() => void disconnect("gmail")}
+        />
+        <AccountRow
+          label="Google Calendar"
+          icon={<CalendarIcon />}
+          status={gmail?.calendar ?? null}
+          connectUrl={api.calendarConnectUrl()}
+          onDisconnect={() => void disconnect("calendar")}
+        />
       </div>
       {error && (
         <p className="form-error" role="alert">
@@ -317,6 +296,68 @@ function ConnectionsPage({
         </p>
       )}
     </>
+  );
+}
+
+function AccountRow({
+  label,
+  icon,
+  status,
+  connectUrl,
+  onDisconnect,
+}: {
+  label: string;
+  icon: ReactNode;
+  status: CalendarStatus | null;
+  connectUrl: string;
+  onDisconnect: () => void;
+}) {
+  return (
+    <div className="row row-static row-account">
+      <span className="row-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="row-text">
+        <span className="row-label">{label}</span>
+        {status && (status.email || status.needsReconnect) && (
+          <span className="row-sub">
+            {status.needsReconnect && !status.connected ? "Stopped working" : status.email}
+          </span>
+        )}
+      </span>
+      {status?.connected ? (
+        <Menu
+          label={`${label} connection`}
+          className="row-menu"
+          buttonClassName="connected-pill"
+          trigger={
+            <>
+              <span className="connected-dot" aria-hidden="true" />
+              Connected
+              <ChevronDownIcon />
+            </>
+          }
+        >
+          {(close) => (
+            <MenuItem
+              danger
+              onSelect={() => {
+                close();
+                onDisconnect();
+              }}
+            >
+              Disconnect
+            </MenuItem>
+          )}
+        </Menu>
+      ) : (
+        status && (
+          <a className="btn btn-small" href={connectUrl}>
+            {status.needsReconnect ? "Reconnect" : "Connect"}
+          </a>
+        )
+      )}
+    </div>
   );
 }
 
@@ -807,6 +848,7 @@ export const VaultIcon = () =>
     "M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3ZM9.5 11.5h5v4h-5v-4ZM10.5 11.5V10a1.5 1.5 0 0 1 3 0v1.5",
   );
 const MailIcon = () => svg("M3.5 6.5h17v11h-17v-11ZM3.5 7l8.5 6.5L20.5 7");
+const CalendarIcon = () => svg("M4.5 6h15v13.5h-15V6ZM4.5 10h15M8.5 4v4M15.5 4v4");
 const PlaneIcon = () =>
   svg(
     "M21 15.5v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V8.5l-8 5v2l8-2.5V18l-2 1.5V21l3.5-1 3.5 1v-1.5L13 18v-5z",

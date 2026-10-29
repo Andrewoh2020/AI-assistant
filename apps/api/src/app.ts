@@ -29,7 +29,22 @@ import {
   syncIfDue,
   type GmailDeps,
 } from "./gmail.js";
-import { GoogleAuthError, TravilaGmail, type Google } from "./google.js";
+import {
+  GoogleAuthError,
+  TravilaCalendar,
+  TravilaGmail,
+  type Google,
+  type GoogleCalendar,
+} from "./google.js";
+import {
+  calendarStatus,
+  checkCalendarNow,
+  connectCalendar,
+  disconnectCalendar,
+  syncCalendar,
+  syncCalendarIfDue,
+  type CalendarDeps,
+} from "./calendar.js";
 import {
   FlightAwareHttp,
   GoogleRoutesHttp,
@@ -42,6 +57,7 @@ import {
   flightViews,
   planFlights,
   planOf,
+  saveBookingRef,
   stepFlight,
   tickAll,
   tickUser,
@@ -107,6 +123,8 @@ export interface AppDeps {
   browserCheckGapMs?: number;
   /** Gmail through Travila's connected apps; built from the config when left out. */
   google?: Google;
+  /** Google Calendar, the same way; built from the config when left out. */
+  calendar?: GoogleCalendar;
   /** Reads bookings out of emails; DeepSeek when left out. */
   bookingReader?: BookingReader;
   /** Live flight status and travel times; built from the config when left out. */
@@ -172,7 +190,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     // A question about trips checks Gmail first, and plans what it finds so the answer knows each
     // flight's check-in; the trip cards follow.
     checkMail: async (userId) => {
-      await checkNow(gmailDeps, userId);
+      await Promise.all([checkNow(gmailDeps, userId), checkCalendarNow(calendarDeps, userId)]);
       await planFlights(flightDeps, userId);
       later(tickUser(flightDeps, userId));
     },
@@ -184,6 +202,17 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       deps.bookingReader ?? new DeepSeekBookingReader(config.deepseekBase, config.deepseekKey),
     vaultKey,
     secret: config.sessionSecret,
+  };
+  const calendarDeps: CalendarDeps = {
+    sql,
+    calendar: deps.calendar ?? new TravilaCalendar(config.travilaBase, config.travilaKey),
+    reader: gmailDeps.reader,
+    vaultKey,
+  };
+  /** Gmail, then Google Calendar, when their last check is old enough. Never throws. */
+  const syncTripsIfDue = async (userId: string) => {
+    await syncIfDue(gmailDeps, userId);
+    await syncCalendarIfDue(calendarDeps, userId);
   };
   const flightDeps: FlightDeps = {
     sql,
@@ -398,7 +427,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!s) return;
     // Opening the app is when new booking emails are looked for (at most every 15 minutes), and
     // when this person's flights get looked at if nothing else is running the scheduler.
-    later(syncIfDue(gmailDeps, s.userId).then(() => tickUser(flightDeps, s.userId)));
+    later(syncTripsIfDue(s.userId).then(() => tickUser(flightDeps, s.userId)));
     return { chats: (await listChats(sql, s)).map(chatSummary) };
   });
 
@@ -884,12 +913,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     state: string,
     outcome: "ok" | "error",
     chat: string | null,
+    which: "gmail" | "calendar" = "gmail",
   ) => {
     const base =
       config.publicUrl ||
       `${config.secureCookies ? "https" : String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0]}://${req.headers["x-forwarded-host"] ?? req.headers.host}`;
     const q = new URLSearchParams({ state, outcome, ...(chat ? { chat } : {}) });
-    return `${base}/api/connectors/gmail/callback?${q}`;
+    return `${base}/api/connectors/${which}/callback?${q}`;
   };
 
   /**
@@ -901,13 +931,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     reply: FastifyReply,
     result: string,
     chat?: string | null,
+    which: "gmail" | "calendar" = "gmail",
   ) => {
     const chats = await listChats(sql, s);
     if (chat && chats.some((c) => c.id === chat)) {
-      return reply.redirect(`/chat/${chat}?gmail=${result}`);
+      return reply.redirect(`/chat/${chat}?${which}=${result}`);
     }
     const [main] = chats.filter((c) => c.kind === "main");
-    const q = `settings=connections&gmail=${result}`;
+    const q = `settings=connections&${which}=${result}`;
     return reply.redirect(main ? `/chat/${main.id}?${q}` : `/?${q}`);
   };
   const chatParam = (v: unknown) =>
@@ -917,7 +948,10 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const s = requireSession(req, reply);
     if (!s) return;
     reply.header("Cache-Control", "no-store");
-    return gmailStatus(gmailDeps, s.userId);
+    return {
+      ...(await gmailStatus(gmailDeps, s.userId)),
+      calendar: await calendarStatus(sql, s.userId),
+    };
   });
 
   app.get<{ Querystring: { chat?: string } }>("/connectors/gmail/start", async (req, reply) => {
@@ -970,6 +1004,56 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const s = requireSession(req, reply);
     if (!s) return;
     await disconnectGmail(gmailDeps, s.userId, s.travilaUserId);
+    return { ok: true };
+  });
+
+  // Google Calendar -----------------------------------------------------------------------------
+  // Connected next to Gmail, the same way; flights only in the calendar become trips too.
+
+  app.get<{ Querystring: { chat?: string } }>("/connectors/calendar/start", async (req, reply) => {
+    const s = req.session;
+    if (!s) return reply.redirect("/sign-in");
+    const state = signState(s.userId, config.sessionSecret);
+    const chat = chatParam(req.query.chat);
+    let url;
+    try {
+      url = await calendarDeps.calendar.connectUrl(
+        s.travilaUserId,
+        gmailCallback(req, state, "ok", chat, "calendar"),
+        gmailCallback(req, state, "error", chat, "calendar"),
+      );
+    } catch (err) {
+      app.log.error(err);
+      return backToSettings(s, reply, "unavailable", chat, "calendar");
+    }
+    return reply.redirect(url);
+  });
+
+  app.get<{ Querystring: { state?: string; outcome?: string; chat?: string } }>(
+    "/connectors/calendar/callback",
+    async (req, reply) => {
+      const s = req.session;
+      if (!s) return reply.redirect("/sign-in");
+      const { state, outcome } = req.query;
+      const chat = chatParam(req.query.chat);
+      const back = (result: string) => backToSettings(s, reply, result, chat, "calendar");
+      if (!state || !checkState(state, s.userId, config.sessionSecret)) return back("failed");
+      if (outcome !== "ok") return back("cancelled");
+      try {
+        await connectCalendar(calendarDeps, s.userId, s.travilaUserId);
+      } catch (err) {
+        if (!(err instanceof GoogleAuthError)) app.log.error(err);
+        return back(err instanceof GoogleAuthError ? "cancelled" : "failed");
+      }
+      later(syncCalendar(calendarDeps, s.userId).then(() => planFlights(flightDeps, s.userId)));
+      return back("connected");
+    },
+  );
+
+  app.delete("/connectors/calendar", async (req, reply) => {
+    const s = requireSession(req, reply);
+    if (!s) return;
+    await disconnectCalendar(calendarDeps, s.userId, s.travilaUserId);
     return { ok: true };
   });
 
@@ -1038,6 +1122,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     homeAddress: str(300),
     answer: str(500),
   };
+  const BOOKING_REF = /^[A-Z0-9]{5,10}$/;
 
   // The Trip prep card. The body can hold a passport number: it goes straight into the vault and
   // is never logged or sent back.
@@ -1048,7 +1133,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         body: {
           type: "object",
           additionalProperties: false,
-          properties: { ...prepProps, noBannedItems: { type: "boolean" } },
+          properties: { ...prepProps, noBannedItems: { type: "boolean" }, bookingRef: str(20) },
         },
       },
     },
@@ -1058,10 +1143,21 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       if (!UUID.test(req.params.id)) throw new NotFound("flight");
       const plan = await planOf(sql, s.userId, req.params.id);
       if (!plan || plan.details.kind !== "flight") throw new NotFound("flight");
-      const { noBannedItems, ...input } = (req.body ?? {}) as Record<string, unknown> & {
+      const { noBannedItems, bookingRef, ...input } = (req.body ?? {}) as Record<
+        string,
+        unknown
+      > & {
         noBannedItems?: boolean;
+        bookingRef?: string;
       };
+      const ref = bookingRef?.replace(/[\s-]+/g, "").toUpperCase();
+      if (ref !== undefined && ref !== "" && !BOOKING_REF.test(ref)) {
+        throw new BadRequest(
+          "A booking reference is 5 to 10 letters and numbers, like on your ticket.",
+        );
+      }
       checkPrep(input, today());
+      if (ref) await saveBookingRef(sql, s.userId, req.params.id, ref);
       const question = plan.checkin_question ?? plan.arrival_question;
       await savePrep(sql, vaultKey, s.userId, input, {
         airline: airlineOf(plan.details),
@@ -1194,7 +1290,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         ? await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(() => [])
         : [];
       for (const u of users) {
-        await syncIfDue(gmailDeps, u.user_id);
+        await syncTripsIfDue(u.user_id);
         await planFlights(flightDeps, u.user_id).catch((err) => app.log.error(err));
       }
       await tickAll(flightDeps);

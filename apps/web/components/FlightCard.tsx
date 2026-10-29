@@ -401,6 +401,10 @@ function PrepForm({
   async function save(e: FormEvent) {
     e.preventDefault();
     const out: PrepAnswers = {};
+    if (need.has("bookingRef")) {
+      out.bookingRef = v.bookingRef?.replace(/[\s-]+/g, "").toUpperCase() ?? "";
+      if (!out.bookingRef) return setError("Add the booking reference from your ticket.");
+    }
     if (need.has("name")) {
       out.firstName = v.firstName?.trim() ?? "";
       out.lastName = v.lastName?.trim() ?? "";
@@ -456,6 +460,19 @@ function PrepForm({
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
             maxLength={500}
+            required
+          />
+        </Field>
+      )}
+      {need.has("bookingRef") && (
+        <Field label="Booking reference" hint="On your e-ticket or the airline's email">
+          <input
+            value={v.bookingRef ?? ""}
+            onChange={(e) => set("bookingRef", e.target.value)}
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            maxLength={20}
             required
           />
         </Field>
