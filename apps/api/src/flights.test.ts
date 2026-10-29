@@ -292,7 +292,8 @@ const H = 3600000;
 
 /** A flight from San Francisco to Singapore leaving in `hours`, with a hotel there. */
 async function bookTrip(userId: string, hours: number) {
-  const depart = new Date(now.getTime() + hours * H);
+  // The time as the app reads the local time back (the night clocks go back, 1:30 am is twice).
+  const depart = localToInstant(local(new Date(now.getTime() + hours * H), "SFO"), "SFO")!;
   const arrive = new Date(depart.getTime() + 17 * H);
   const arriveDay = local(arrive, "SIN").slice(0, 10);
   await withUser(sql!, userId, async (tx) => {

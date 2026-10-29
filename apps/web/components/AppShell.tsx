@@ -642,6 +642,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
   const archivedChats = chats.filter((c) => c.archived);
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
+  // A flight's trip card shows once, on its newest message (asking to check in brings it down).
+  const newestCard = new Map(messages.flatMap((m) => (m.flight ? [[m.flight.id, m.id]] : [])));
   const working = !!activeRunId || !!pending;
   // A check-in or arrival card being done in the background shows at the bottom like a reply.
   const background = working ? null : backgroundJob(messages);
@@ -917,7 +919,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                     />
                   )}
                 </article>
-                {m.flight && flightCard(m.flight)}
+                {m.flight && newestCard.get(m.flight.id) === m.id && flightCard(m.flight)}
                 {m.card === "travel" && <TravelCard />}
                 {m.card === "gmail" && <GmailCard chatId={chatId} />}
                 {ended && browserCards(ended.browsers)}
