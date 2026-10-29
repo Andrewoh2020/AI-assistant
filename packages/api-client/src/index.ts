@@ -249,6 +249,15 @@ export interface GmailStatus {
   lastCheckedAt: string | null;
   /** Upcoming trips found in the mail, soonest first. */
   trips: TripView[];
+  /** Google Calendar, connected next to Gmail: flights only in the calendar become trips too. */
+  calendar: CalendarStatus;
+}
+
+/** Google Calendar as Settings shows it. */
+export interface CalendarStatus {
+  connected: boolean;
+  needsReconnect: boolean;
+  email: string | null;
 }
 
 /** Something a flight may need from the person before check-in. Asked once, then kept. */
@@ -262,7 +271,9 @@ export type PrepKey =
   | "knownTraveler"
   | "frequentFlyer"
   | "seatStyle"
-  | "homeAddress";
+  | "homeAddress"
+  /** The flight's booking reference, when it came from a calendar event without one. */
+  | "bookingRef";
 
 /** The person's travel details, as Settings shows them. Hidden numbers are only flagged. */
 export interface TravelProfileView {
@@ -315,6 +326,8 @@ export interface PrepAnswers {
   seatEmptyNearby?: boolean;
   seatAvoidWashroom?: boolean;
   homeAddress?: string;
+  /** This flight's booking reference. */
+  bookingRef?: string;
   /** The answer to the question the airline or arrival form asked. */
   answer?: string;
   /** "I'm not carrying any banned items" for this trip. */
@@ -547,6 +560,10 @@ export function createClient(baseUrl: string, fetchImpl: typeof fetch = fetch) {
     gmailConnectUrl: (chatId?: string) =>
       `${baseUrl}/connectors/gmail/start${chatId ? `?chat=${encodeURIComponent(chatId)}` : ""}`,
     disconnectGmail: () => call<{ ok: true }>("DELETE", "/connectors/gmail"),
+    /** Where the browser goes to connect Google Calendar; chatId as for Gmail. */
+    calendarConnectUrl: (chatId?: string) =>
+      `${baseUrl}/connectors/calendar/start${chatId ? `?chat=${encodeURIComponent(chatId)}` : ""}`,
+    disconnectCalendar: () => call<{ ok: true }>("DELETE", "/connectors/calendar"),
     /** Upcoming flights' trip cards, soonest first. Also moves along any check-in in progress. */
     flights: () => call<{ flights: FlightView[] }>("GET", "/flights"),
     flight: (id: string) => call<{ flight: FlightView }>("GET", `/flights/${id}`),

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flights From Your Calendar</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --surface: #f5f6f8;
+        --text: #16181d;
+        --muted: #5a606b;
+        --border: #dfe2e7;
+        --accent: #0066cc;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 32px 16px 64px;
+      }
+      h1 {
+        font-size: 28px;
+        margin: 0 0 4px;
+      }
+      h2 {
+        font-size: 19px;
+        margin: 32px 0 8px;
+      }
+      .lead {
+        color: var(--muted);
+        margin: 0 0 24px;
+      }
+      .box {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin: 16px 0;
+      }
+      .box strong {
+        color: var(--accent);
+      }
+      li {
+        margin: 6px 0;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Flights from your Google Calendar</h1>
+      <p class="lead">
+        So "check me in for my flight" works even when the flight is only in your calendar.
+        Checked on 29 October 2026.
+      </p>
+
+      <div class="box">
+        <strong>Short answer:</strong> nothing needs changing on Google's side. No Google Cloud
+        project, no consent-screen edits, no Google review. You click one "Connect Google Calendar"
+        button and press Allow on Google's page, once.
+      </div>
+
+      <h2>What I found</h2>
+      <ul>
+        <li>
+          Ability doesn't have its own Google app. Gmail is connected through Travila's connected
+          apps (run by Pipedream), which use Pipedream's own Google app. Google has already
+          reviewed that app, so we never needed a Google Cloud project, a consent screen or
+          Google verification.
+        </li>
+        <li>
+          Pipedream has a separate Google Calendar app that works the same way. I checked
+          Travila's list of available apps today: Google Calendar is on it.
+        </li>
+        <li>
+          The Gmail connection can't simply be widened to include your calendar. Pipedream's
+          Gmail app only asks Google for Gmail permissions, and each Pipedream app has its own
+          Google permission page. So Calendar is a second, separate connect step.
+        </li>
+        <li>
+          On Google's page you'll be asked to allow viewing <em>and editing</em> calendar events.
+          That's the fixed set of permissions Pipedream's Calendar app asks for. Ability will only
+          read events and never change or add any.
+        </li>
+        <li>
+          Getting a "view only" permission page would mean setting up Ability's own Google app and
+          going through Google's review (privacy policy, demo video, usually weeks). I don't think
+          it's worth that now.
+        </li>
+      </ul>
+
+      <h2>What you'll see</h2>
+      <ul>
+        <li>
+          In Settings › Connections, next to Gmail, a <strong>Connect Google Calendar</strong>
+          button. The assistant will offer it too when it can't find a flight. You click it,
+          choose your Google account and press Allow. That's it.
+        </li>
+        <li>
+          Calendar events that look like a flight (an airline flight number such as the ones Gmail
+          adds, or one you typed in, with a route and time) become trips with a trip card, the
+          same as a booking from Gmail.
+        </li>
+        <li>
+          If the same flight is already there from Gmail or chat, it's matched by route and
+          departure time, so you never see it twice.
+        </li>
+        <li>
+          Calendar events often don't have the booking reference. Then the trip card asks for it,
+          once, and the assistant points you there.
+        </li>
+      </ul>
+
+      <h2>How often and what it costs</h2>
+      <ul>
+        <li>
+          No new background job. The calendar is checked at the same moments Gmail already is:
+          once an hour, and when you use the app and the last check is over 15 minutes old.
+        </li>
+        <li>
+          Each check is one small request to Google through Travila, the same kind of request the
+          Gmail check already makes several of.
+        </li>
+        <li>
+          Only events that look like flights go to the AI to read, and each one only once (again if
+          you change it). That's a fraction of a cent per flight.
+        </li>
+      </ul>
+
+      <h2>What I still can't check until you connect</h2>
+      <p>
+        I can't read a calendar until one is connected, so the first real read happens after you
+        click Connect. I'll check it works on your own calendar then. Nothing goes live on the
+        website until you say so.
+      </p>
+      <p class="muted">
+        Sources: Travila's connected-apps docs, Pipedream's Gmail and Google Calendar app pages,
+        and Travila's live app list, all checked 29 Oct 2026.
+      </p>
+    </main>
+  </body>
+</html>

@@ -570,8 +570,11 @@ function missingWords(c: Ctx): string[] {
     frequentFlyer: "",
     seatStyle: "",
     homeAddress: "",
+    bookingRef: "",
   };
   const out = needs.required.map((k) => words[k]).filter(Boolean);
+  // A flight from a calendar event often comes without one; check-in needs it to find the booking.
+  if (!c.b.confirmation) out.unshift("your booking reference");
   if (c.plan.checkin_question) out.push(`an answer to "${c.plan.checkin_question}"`);
   if (!c.plan.no_banned_items) out.push('a tick on "no banned items"');
   return out;
@@ -1588,6 +1591,18 @@ export async function afterPrep(
   });
 }
 
+/** The booking reference typed on the trip card, for a flight that came without one. */
+export async function saveBookingRef(sql: Sql, userId: string, itemId: string, ref: string) {
+  await withUser(
+    sql,
+    userId,
+    (tx) => tx`
+      UPDATE trip_items SET confirmation_ref = ${ref}, updated_at = now(),
+             details = details || ${tx.json({ confirmation: ref })}
+      WHERE id = ${itemId} AND kind = 'booking'`,
+  );
+}
+
 /** The flight's plan, or null when it isn't one of this person's flights. */
 export async function planOf(sql: Sql, userId: string, itemId: string) {
   const [row] = await withUser(
@@ -1713,7 +1728,7 @@ export async function flightViews(
         browser: browser(p.checkin_browser_id),
       },
       prep: {
-        required: needs.required,
+        required: b.confirmation ? needs.required : ["bookingRef", ...needs.required],
         optional: needs.optional,
         have: needs.have,
         warnings: needs.warnings,

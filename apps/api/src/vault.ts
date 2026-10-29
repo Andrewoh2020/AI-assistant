@@ -596,7 +596,7 @@ export async function saveAccountToken(
   sql: Sql,
   vk: VaultKey,
   userId: string,
-  provider: "gmail",
+  provider: "gmail" | "google_calendar",
   token: string,
 ): Promise<void> {
   await withVault(sql, userId, async (tx) => {
@@ -625,7 +625,7 @@ export async function accountToken(
   sql: Sql,
   vk: VaultKey,
   userId: string,
-  provider: "gmail",
+  provider: "gmail" | "google_calendar",
 ): Promise<string | null> {
   const [row] = await withVault(
     sql,
@@ -651,7 +651,7 @@ export async function accountToken(
 export async function deleteAccountToken(
   sql: Sql,
   userId: string,
-  provider: "gmail",
+  provider: "gmail" | "google_calendar",
 ): Promise<void> {
   await withVault(
     sql,

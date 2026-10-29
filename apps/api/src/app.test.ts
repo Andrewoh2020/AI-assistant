@@ -875,13 +875,18 @@ describe.skipIf(!process.env.DATABASE_URL)("api", () => {
     const results = travila.submitted.at(-1)!.results.map((r) => r.resultJson as object);
     expect(results.some((r) => "shown" in r && /Already offered/.test(String(r.shown)))).toBe(true);
 
-    // A different task later can offer it again; once connected, it isn't offered.
+    // A different task later can offer it again; with Gmail connected the card still offers
+    // Google Calendar, and once both are connected it isn't offered.
+    await sql!`
+      INSERT INTO connector_accounts (user_id, provider, status, account_email)
+      SELECT c.user_id, 'gmail', 'connected', 'me@gmail.com' FROM chats c WHERE c.id = ${chat}`;
     travila.scripts.push([{ tools: [offer] }, { answer: "Connect it if you like." }]);
     await pollUntilDone(a, (await ask(a, chat, "Any hotel bookings?")).json().run.id);
     expect(await cards()).toEqual(["travel", "gmail", "gmail"]);
     await sql!`
       INSERT INTO connector_accounts (user_id, provider, status, account_email)
-      SELECT c.user_id, 'gmail', 'connected', 'me@gmail.com' FROM chats c WHERE c.id = ${chat}`;
+      SELECT c.user_id, 'google_calendar', 'connected', 'me@gmail.com' FROM chats c
+      WHERE c.id = ${chat}`;
     travila.scripts.push([{ tools: [offer] }, { answer: "Done." }]);
     await pollUntilDone(a, (await ask(a, chat, "Any bills due?")).json().run.id);
     expect(await cards()).toEqual(["travel", "gmail", "gmail"]);

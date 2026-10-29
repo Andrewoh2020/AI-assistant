@@ -91,19 +91,20 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [settings, setSettings] = useState<"home" | "vault" | "connections" | null>(null);
   const [gmailResult, setGmailResult] = useState<GmailResult | null>(null);
   // On the day of a flight its trip card sits at the top of the Main chat.
-  // Back from Google's sign-in (connecting Gmail): open Settings where it left off.
+  // Back from Google's sign-in (connecting Gmail or Google Calendar): open Settings where it left off.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     if (q.get("settings") !== "connections") return;
     setSettings("connections");
-    const result = q.get("gmail");
+    const app = q.has("calendar") ? "calendar" : "gmail";
+    const outcome = q.get(app);
     if (
-      result === "connected" ||
-      result === "cancelled" ||
-      result === "failed" ||
-      result === "unavailable"
+      outcome === "connected" ||
+      outcome === "cancelled" ||
+      outcome === "failed" ||
+      outcome === "unavailable"
     ) {
-      setGmailResult(result);
+      setGmailResult({ app, outcome });
     }
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
