@@ -923,7 +923,9 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       depart,
       s.blocked
         ? `${checkinSite(c)} kept blocking my browser`
-        : "the airline's site didn't work for my browser",
+        : s.status === "failed" && !s.bu_run_id
+          ? "my browser couldn't start"
+          : "the airline's site didn't work for my browser",
     );
   }
   const found = readMarker(report);
