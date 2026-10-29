@@ -225,7 +225,9 @@ function CheckinLine({ flight: f }: { flight: FlightView }) {
     case "scheduled":
       text = missing
         ? `I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}). I just need a few details first.`
-        : `All set. I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}) and send your boarding pass.`;
+        : ci.note
+          ? `My last try didn't work: ${ci.note}. I'll try again by myself at ${viewerWhen(ci.opensAt)}.`
+          : `All set. I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}) and send your boarding pass.`;
       break;
     case "waiting_for_you":
       text = ci.question

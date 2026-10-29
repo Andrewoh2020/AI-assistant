@@ -692,6 +692,7 @@ async function startCheckin(c: Ctx): Promise<Date> {
     checkin_status: "running",
     checkin_browser_id: session.id,
     checkin_tries: c.plan.checkin_tries + 1,
+    checkin_note: null,
   });
   return new Date(c.now.getTime() + 30000);
 }
@@ -1072,7 +1073,8 @@ async function retryCheckin(
   const at = new Date(c.now.getTime() + RETRY_MIN * MINUTE);
   const lastCall = depart.getTime() - BACKUP_BEFORE_H * HOUR;
   if (c.plan.checkin_tries < (notFound ? 2 : MAX_CHECKIN_TRIES) && at.getTime() < lastCall) {
-    await patch(c, { checkin_status: "scheduled", checkin_due_at: at });
+    // The card says why the last try didn't work until the next one starts.
+    await patch(c, { checkin_status: "scheduled", checkin_due_at: at, checkin_note: why });
     return at;
   }
   await backup(c, `I couldn't check you in: ${why}.`);

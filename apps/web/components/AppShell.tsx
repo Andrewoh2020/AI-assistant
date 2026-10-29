@@ -316,10 +316,12 @@ export function AppShell({ chatId }: { chatId: string }) {
   // While nothing is being answered, look now and then for messages the assistant sent by itself
   // (a new trip card, "You're checked in") and keep trip cards current. Faster while a check-in
   // or arrival card is being done.
+  // Also from shortly before a check-in is due, so its browser shows up as soon as it starts.
   const flightBusy = messages.some(
     (m) =>
       m.flight &&
       (m.flight.checkin.status === "running" ||
+        (m.flight.checkin.status === "scheduled" && dueSoon(m.flight.checkin.opensAt)) ||
         m.flight.arrival?.status === "running" ||
         (m.flight.arrival?.status === "ready" && m.flight.arrival.confirmed)),
   );
@@ -641,6 +643,8 @@ export function AppShell({ chatId }: { chatId: string }) {
   const archivedChats = chats.filter((c) => c.archived);
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
   const working = !!activeRunId || !!pending;
+  // A check-in or arrival card being done in the background shows at the bottom like a reply.
+  const background = working ? null : backgroundJob(messages);
   const isEmpty = messages.length === 0 && !working;
 
   const q = query.trim().toLowerCase();
@@ -951,11 +955,16 @@ export function AppShell({ chatId }: { chatId: string }) {
           {working && activeRun && activeRun.browsers.length > 0 && (
             <div>{browserCards(activeRun.browsers)}</div>
           )}
-          {working && (
-            <div className="progress" role="status">
-              <span className="dots" aria-hidden="true" />
-              <span>{waitingFor ?? `${activeRun?.statusLine || "Thinking"}…`}</span>
-            </div>
+          {working && <Progress text={waitingFor ?? `${activeRun?.statusLine || "Thinking"}…`} />}
+          {background && (
+            <Progress
+              text={background.text}
+              onWatch={
+                background.browser
+                  ? () => setPreview({ id: background.browser!.id, takeControl: false })
+                  : undefined
+              }
+            />
           )}
           <div ref={bottomRef} />
         </div>
@@ -1477,4 +1486,56 @@ function PinIcon() {
       <path d="M9 3h6l-1 6 3 3v2h-4v6l-1 1-1-1v-6H7v-2l3-3-1-6Z" fill="currentColor" />
     </svg>
   );
+}
+
+/** The "someone is typing" bubble, with what the assistant is doing next to it. */
+function Progress({ text, onWatch }: { text: string; onWatch?: () => void }) {
+  return (
+    <div className="progress" role="status">
+      <span className="typing" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="progress-text">{text}</span>
+      {onWatch && (
+        <button type="button" className="bsign-alt" onClick={onWatch}>
+          Watch
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Within a couple of minutes of this time (an ISO instant), either side. */
+function dueSoon(at: string | null): boolean {
+  if (!at) return false;
+  const gap = Date.parse(at) - Date.now();
+  return gap < 2 * 60_000 && gap > -5 * 60_000;
+}
+
+/** A check-in or arrival card the app is doing by itself right now, newest first. */
+function backgroundJob(
+  messages: MessageView[],
+): { text: string; browser: BrowserView | null } | null {
+  for (const m of [...messages].reverse()) {
+    const f = m.flight;
+    if (!f) continue;
+    const name = f.flightNumber ?? f.airlineName;
+    const step = (b: BrowserView | null | undefined) =>
+      b?.step && !/^[A-Z_]{5,}\b/.test(b.step) ? `: ${b.step.slice(0, 140)}` : "…";
+    if (f.checkin.status === "running") {
+      return {
+        text: `Checking you in for ${name}${step(f.checkin.browser)}`,
+        browser: f.checkin.browser ?? null,
+      };
+    }
+    if (f.arrival?.status === "running") {
+      return {
+        text: `Filling in your arrival card${step(f.arrival.browser)}`,
+        browser: f.arrival.browser ?? null,
+      };
+    }
+  }
+  return null;
 }
