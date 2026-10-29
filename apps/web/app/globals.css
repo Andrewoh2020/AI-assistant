@@ -1850,10 +1850,6 @@ dialog.confirm p {
   flex-direction: column;
   gap: 2px;
 }
-.trip-card.is-pinned {
-  box-shadow: var(--shadow-1);
-  margin: 0 0 12px;
-}
 .trip-card.is-cancelled {
   border-color: var(--danger);
 }
@@ -2060,13 +2056,6 @@ dialog.confirm p {
 .trip-banned input {
   margin-top: 2px;
   flex: none;
-}
-.today-pin {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--bg);
-  padding-top: 4px;
 }
 @media (max-width: 520px) {
   .trip-row {

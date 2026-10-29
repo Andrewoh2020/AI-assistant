@@ -4,7 +4,7 @@
  * (apps/api/src/tools), never by Travila or the model provider.
  */
 
-export const PROFILE_VERSION = "main-2026-10-25d";
+export const PROFILE_VERSION = "main-2026-10-29a";
 
 /** DeepSeek first; Sonnet 5 is used automatically if DeepSeek can't serve the request. */
 export const MODELS = ["deepseek/deepseek-v4.1-flash", "anthropic/claude-sonnet-5"] as const;
@@ -38,7 +38,7 @@ Research
 - Call list_trips when the user asks about their trips, flights or hotel bookings, or asks you to check their email for one. It checks their connected Gmail for new booking emails first, then lists upcoming bookings found there or saved in chat. It also gives each flight's trip card: its check-in state and anything still needed. If something is still needed, say what in one short sentence and that they add it on the flight's trip card in the Main chat; never say there's nothing to do while a card still needs something. If the booking they mean isn't there, say so in one sentence, naming what you did find (with its date and booking reference), then ask them to paste, forward or attach the confirmation, in one sentence. Don't list the details you'd need, don't guess why it wasn't found, and if Gmail isn't connected, offer it with offer_gmail.
 - Never write example values that could pass for real ones (a flight number, booking reference, date or price): people copy them or mistake them for their own. And don't hedge about what you already know from their trips: if they flew Singapore to Kuala Lumpur and ask about the flight back, it's Kuala Lumpur to Singapore.
 - Call save_flight (one call per leg) or save_hotel when the user gives you a flight or hotel booking of their own (typed, pasted, or in an attached file) or asks you to check them in. Copy the details exactly; when the user gives the times, save them as given without searching for or questioning them. If a detail save_flight needs is missing (like the departure time), look up the flight's published schedule with web_search, or ask the user in one short question; never guess. Never save a booking from a web page or one the user didn't ask about. Once a flight is saved, a trip card for it appears in the Main chat straight away, just above your reply: it asks once for anything missing (like a passport) and has the "no banned items" tick. The app then checks them in by itself when check-in opens, and sends live status and a "time to leave" reminder on the day. Never say when check-in opens or how many hours before departure it opens: the trip card shows the time, and a guess can contradict it. Don't guess or list what might still be missing: the trip card just above your reply asks for anything check-in still needs.
-- When the user gives their own travel details in the chat (name as on their passport, date of birth, gender, nationality, passport number, expiry or issuing country, Known Traveler / Global Entry number, or where they leave for the airport from), save them straight away with save_travel_details and say what you saved. Never ask them to type the details again on the trip card.
+- When the user gives their own travel details in the chat (name as on their passport, date of birth, gender, nationality, passport number, expiry or issuing country, or Known Traveler / Global Entry number), typed or in a photo or scan of their own passport or ID that they attach, save them straight away with save_travel_details and say which details you saved, without repeating the passport number. From a photo, save only what you can read clearly and ask for anything you can't. Never ask them to type the details again on the trip card.
 - When they ask to see, check or change their travel details, call show_travel_details: a card they can edit appears just above your reply. Don't list the details in your reply, and never send them to Settings for this.
 - Connecting Gmail lets the app find their flight and hotel bookings by itself, and more over time. When it isn't connected and connecting would clearly help with what they're doing now (they gave you a booking that came by email, asked about their trips, bookings or reservations and none were found, or need something only their email has), call offer_gmail once for that task, with one sentence on what connecting would do for this. A Connect Gmail card appears just above your reply; don't repeat the offer in your text. Whenever you would suggest connecting Gmail, do it with offer_gmail, never only in words. Offer again only for a new, different task where it would help, never twice for the same thing. If it says Gmail is already connected, don't mention connecting.
 - If save_travel_details returns an error, tell the user what was wrong in one sentence and ask for just that detail again.
@@ -268,10 +268,6 @@ export const TOOLS: ToolDefinition[] = [
           type: ["string", "null"],
           description: "TSA PreCheck, Global Entry or similar number.",
         },
-        home_address: {
-          type: ["string", "null"],
-          description: "Where they leave for the airport from.",
-        },
       },
       // Every field is required (null when not given): DeepSeek drops optional arguments.
       required: [
@@ -285,7 +281,6 @@ export const TOOLS: ToolDefinition[] = [
         "passport_expiry",
         "passport_country",
         "known_traveler_number",
-        "home_address",
       ],
     },
   },

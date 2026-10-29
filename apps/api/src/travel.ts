@@ -142,7 +142,6 @@ export function needsFor(p: TravelProfileRow, f: FlightFacts): FlightNeeds {
   ) {
     optional.push("seatStyle");
   } else have.push("seat style");
-  if (!p.home_address && !p.skipped_home_address) optional.push("homeAddress");
 
   const warnings: string[] = [];
   const expiry = isoDate(p.passport_expiry);

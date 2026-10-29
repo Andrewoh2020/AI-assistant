@@ -421,7 +421,6 @@ export interface FlightView {
     beAtLocal: string | null;
   } | null;
   /** No home address yet: the leave time can't use traffic. */
-  needsHomeAddress: boolean;
 }
 
 export interface Me {

@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
@@ -90,7 +91,6 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [settings, setSettings] = useState<"home" | "vault" | "connections" | null>(null);
   const [gmailResult, setGmailResult] = useState<GmailResult | null>(null);
   // On the day of a flight its trip card sits at the top of the Main chat.
-  const [todayFlight, setTodayFlight] = useState<FlightView | null>(null);
   // Back from Google's sign-in (connecting Gmail): open Settings where it left off.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -182,7 +182,6 @@ export function AppShell({ chatId }: { chatId: string }) {
     setAttachments([]);
     setPending(null);
     setPreview(null);
-    setTodayFlight(null);
     setDraft(drafts.get(chatId) ?? "");
     setUnread((prev) => {
       if (!prev.has(chatId)) return prev;
@@ -218,12 +217,6 @@ export function AppShell({ chatId }: { chatId: string }) {
         setSelected(lastAnswer ? { messageId: lastAnswer.id, n: null } : null);
         // A brand-new chat is ready to type in.
         if (data.messages.length === 0 && !data.activeRun) inputRef.current?.focus();
-        if (data.chat.kind === "main") {
-          api
-            .flights()
-            .then((r) => !cancelled && setTodayFlight(r.flights.find((f) => f.today) ?? null))
-            .catch(() => {});
-        }
       })
       .catch((err) => {
         if (!cancelled && !handleAuth(err))
@@ -330,22 +323,17 @@ export function AppShell({ chatId }: { chatId: string }) {
         m.flight.arrival?.status === "running" ||
         (m.flight.arrival?.status === "ready" && m.flight.arrival.confirmed)),
   );
-  const isMain = chat?.kind === "main";
   useEffect(() => {
     if (activeRunId || pending || !chat) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       try {
-        const [data, upcoming] = await Promise.all([
-          api.getChat(chatId),
-          isMain ? api.flights() : Promise.resolve(null),
-        ]);
+        const data = await api.getChat(chatId);
         if (stopped) return;
         // A reply someone started elsewhere (another tab) is picked up too.
         if (data.activeRun) setActiveRun(data.activeRun);
         setMessages(data.messages);
-        if (upcoming) setTodayFlight(upcoming.flights.find((f) => f.today) ?? null);
       } catch (err) {
         if (handleAuth(err)) return;
       }
@@ -356,7 +344,7 @@ export function AppShell({ chatId }: { chatId: string }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [chatId, chat, isMain, activeRunId, pending, flightBusy, handleAuth]);
+  }, [chatId, chat, activeRunId, pending, flightBusy, handleAuth]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -405,7 +393,7 @@ export function AppShell({ chatId }: { chatId: string }) {
     }
   }
 
-  async function attach(list: FileList | null) {
+  async function attach(list: FileList | File[] | null) {
     const picked = [...(list ?? [])];
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (!picked.length) return;
@@ -422,6 +410,21 @@ export function AppShell({ chatId }: { chatId: string }) {
         setUploading((n) => n - 1);
       }
     }
+  }
+
+  // A copied image or file pasted into the message box is attached, like one dropped on it.
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...e.clipboardData.files];
+    if (!files.length) return;
+    e.preventDefault();
+    const stamp = new Date().toISOString().slice(0, 19).replace("T", " ").replaceAll(":", ".");
+    // A copied image has no name of its own ("image.png"), so give it one people can recognise.
+    const named = files.map((f) =>
+      /^image\.\w+$/.test(f.name)
+        ? new File([f], `Pasted image ${stamp}.${f.name.split(".").pop()}`, { type: f.type })
+        : f,
+    );
+    void attach(named);
   }
 
   // Dragging files over the window turns the message box into a drop target, like Muse.
@@ -575,7 +578,6 @@ export function AppShell({ chatId }: { chatId: string }) {
     ...(activeRun?.browsers ?? []),
     ...endedRuns.flatMap((r) => r.browsers),
     ...messages.flatMap((m) => m.browsers),
-    ...flightBrowsers(todayFlight),
     ...messages.flatMap((m) => flightBrowsers(m.flight)),
   ];
   const previewBrowser = preview ? allBrowsers.find((b) => b.id === preview.id) : undefined;
@@ -594,20 +596,17 @@ export function AppShell({ chatId }: { chatId: string }) {
           : f.arrival,
     });
     setMessages((prev) => prev.map((m) => (m.flight ? { ...m, flight: inFlight(m.flight) } : m)));
-    setTodayFlight((f) => (f ? inFlight(f) : f));
   }
 
   function updateFlight(view: FlightView) {
     setMessages((prev) => prev.map((m) => (m.flight?.id === view.id ? { ...m, flight: view } : m)));
-    setTodayFlight((f) => (f?.id === view.id ? view : f));
   }
 
-  function flightCard(f: FlightView, pinned = false) {
+  function flightCard(f: FlightView) {
     return (
       <FlightCard
-        key={`${pinned ? "pin" : "msg"}-${f.id}`}
+        key={f.id}
         flight={f}
-        pinned={pinned}
         onChange={updateFlight}
         browserCard={(b) => browserCards([b])}
       />
@@ -882,7 +881,6 @@ export function AppShell({ chatId }: { chatId: string }) {
               Couldn&apos;t open this chat: {loadError}
             </p>
           )}
-          {todayFlight && <div className="today-pin">{flightCard(todayFlight, true)}</div>}
           {isEmpty && !loadError && chat && (
             <div className="empty">
               <h2>What would you like to know?</h2>
@@ -915,8 +913,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                     />
                   )}
                 </article>
-                {/* On the day the card is pinned at the top instead. */}
-                {m.flight && m.flight.id !== todayFlight?.id && flightCard(m.flight)}
+                {m.flight && flightCard(m.flight)}
                 {m.card === "travel" && <TravelCard />}
                 {m.card === "gmail" && <GmailCard chatId={chatId} />}
                 {ended && browserCards(ended.browsers)}
@@ -1014,6 +1011,7 @@ export function AppShell({ chatId }: { chatId: string }) {
               value={draft}
               onChange={(e) => changeDraft(e.target.value)}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               placeholder="Message"
               rows={1}
               maxLength={8000}

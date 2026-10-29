@@ -158,11 +158,6 @@ export function TravelPage() {
       </div>
 
       <div className="group">
-        <TextRow
-          label="Where you leave for the airport from"
-          value={p.homeAddress}
-          onSave={(v) => save({ homeAddress: v })}
-        />
         <SelectRow
           label="Seat"
           value={p.seatSide}

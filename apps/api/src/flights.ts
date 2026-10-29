@@ -231,7 +231,7 @@ interface LeavePlan {
   mode: "car" | "train" | null;
   minutes: number | null;
   other: RouteOption | null;
-  from: string;
+  from: string | null;
   /** When to be at the airport. */
   beAt: string;
   early: number;
@@ -780,7 +780,7 @@ export function checkinTask(c: Ctx, aliases: string[], site: string | null): str
     "- The person has told us themselves that they are not carrying any banned or dangerous items. You may confirm the airline's standard dangerous goods / restricted items statement for them. Don't confirm any other statement on their behalf: if the site asks for one, stop with NEEDS_INFO.",
     "",
     "Steps",
-    "1. Find the check-in page and look up the booking with the booking reference and last name (and first name if asked). Don't sign in unless the site requires it.",
+    "1. Find the check-in page and look up the booking with the booking reference and last name (and first name if asked). Don't sign in unless the site requires it. If the site can't find the booking, check that each field holds exactly the value above, with no extra spaces, and try once more before reporting NOT_FOUND.",
     "2. Decline every paid extra: upgrades, extra bags, priority boarding, insurance, paid seats, hotels, cars. Never enter payment details or buy anything.",
     "3. Fill in any details the site asks for from the passenger details above. If the person is already checked in, go straight to the boarding pass.",
     '4. Complete check-in, then get the boarding pass: download it (PDF, or the airline\'s mobile pass file) into outputs/. If there is no download, save the boarding pass page as a PDF into outputs/ named "boarding-pass.pdf".',
@@ -1394,7 +1394,6 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
     return leaveWatch(c, depart);
   if (now < start) return start;
   const from = leaveFrom(c);
-  if (!from) return null;
   // Big delays (an hour or more) move the plan later; early departures always move it earlier.
   let planned = depart;
   const liveAt = plan.live?.departAt ? new Date(plan.live.departAt) : null;
@@ -1414,7 +1413,7 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
   if (fresh && prev) {
     car = prev.mode === "car" ? { mode: "car", minutes: prev.minutes! } : prev.other;
     train = prev.mode === "train" ? { mode: "train", minutes: prev.minutes! } : prev.other;
-  } else if (deps.routes.available && to) {
+  } else if (deps.routes.available && to && from) {
     const guess = new Date(beAt.getTime() - HOUR);
     const route = (m: "car" | "train") =>
       deps.routes.travel(m, from, { lat: to.lat, lon: to.lon }, guess).catch((err) => {
@@ -1492,7 +1491,7 @@ async function leaveWatch(c: Ctx, depart: Date): Promise<Date | null> {
   const { plan, now, deps, b } = c;
   const p = plan.leave_plan;
   const leaveBy = plan.leave_by ? new Date(plan.leave_by) : null;
-  if (!p || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_watched"))
+  if (!p?.from || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_watched"))
     return null;
   if (now >= leaveBy || !deps.routes.available) return null;
   if (now.getTime() < leaveBy.getTime() - 15 * MINUTE)
@@ -1745,7 +1744,6 @@ export async function flightViews(
               : null,
           }
         : null,
-      needsHomeAddress: !data.profile.home_address,
     });
   }
   return out;
