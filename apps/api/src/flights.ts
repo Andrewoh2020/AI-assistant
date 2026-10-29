@@ -63,31 +63,93 @@ const RUN_COST_USD = 0.6;
 /** Lease held while one flight is being looked at, so two ticks don't act twice. */
 const LEASE_MS = 2 * MINUTE;
 
-/** Airlines' own websites (domain only), where check-in happens and hidden values may be typed. */
-export const AIRLINES: Record<string, { name: string; domain: string }> = {
+/**
+ * Airlines' own websites, where check-in happens and hidden values (passport) may be typed: the
+ * domain, and the check-in page when there is a fixed one (the browser starts there).
+ */
+export const AIRLINES: Record<string, { name: string; domain: string; checkin?: string }> = {
+  "3K": { name: "Jetstar Asia", domain: "jetstar.com" },
+  "6E": { name: "IndiGo", domain: "goindigo.in" },
   AA: { name: "American", domain: "aa.com" },
   AC: { name: "Air Canada", domain: "aircanada.com" },
   AF: { name: "Air France", domain: "airfrance.com" },
+  AI: { name: "Air India", domain: "airindia.com" },
+  AK: { name: "AirAsia", domain: "airasia.com", checkin: "https://www.airasia.com/check-in/" },
   AS: { name: "Alaska", domain: "alaskaair.com" },
   B6: { name: "JetBlue", domain: "jetblue.com" },
   BA: { name: "British Airways", domain: "britishairways.com" },
+  BR: { name: "EVA Air", domain: "evaair.com" },
+  CI: { name: "China Airlines", domain: "china-airlines.com" },
   CX: { name: "Cathay Pacific", domain: "cathaypacific.com" },
+  D7: { name: "AirAsia X", domain: "airasia.com", checkin: "https://www.airasia.com/check-in/" },
   DL: { name: "Delta", domain: "delta.com" },
   EK: { name: "Emirates", domain: "emirates.com" },
+  EY: { name: "Etihad", domain: "etihad.com" },
+  FD: { name: "Thai AirAsia", domain: "airasia.com", checkin: "https://www.airasia.com/check-in/" },
+  GA: { name: "Garuda Indonesia", domain: "garuda-indonesia.com" },
   HA: { name: "Hawaiian", domain: "hawaiianairlines.com" },
   JL: { name: "JAL", domain: "jal.co.jp" },
+  JQ: { name: "Jetstar", domain: "jetstar.com" },
   KE: { name: "Korean Air", domain: "koreanair.com" },
   KL: { name: "KLM", domain: "klm.com" },
   LH: { name: "Lufthansa", domain: "lufthansa.com" },
+  MH: { name: "Malaysia Airlines", domain: "malaysiaairlines.com" },
   NH: { name: "ANA", domain: "ana.co.jp" },
+  OD: { name: "Batik Air Malaysia", domain: "batikair.com.my" },
+  PR: { name: "Philippine Airlines", domain: "philippineairlines.com" },
   QF: { name: "Qantas", domain: "qantas.com" },
   QR: { name: "Qatar Airways", domain: "qatarairways.com" },
   SQ: { name: "Singapore Airlines", domain: "singaporeair.com" },
   TG: { name: "Thai Airways", domain: "thaiairways.com" },
+  TK: { name: "Turkish Airlines", domain: "turkishairlines.com" },
+  TR: { name: "Scoot", domain: "flyscoot.com" },
   UA: { name: "United", domain: "united.com" },
+  VN: { name: "Vietnam Airlines", domain: "vietnamairlines.com" },
   VS: { name: "Virgin Atlantic", domain: "virginatlantic.com" },
   WN: { name: "Southwest", domain: "southwest.com" },
 };
+
+/**
+ * Ability Practice Air: a pretend airline on our own site, so check-in can be tried from start to
+ * finish without a real flight. Its flights are "ZZ 101" and so on.
+ */
+export const PRACTICE_AIRLINE = "ZZ";
+
+/** The airline's website for check-in; the practice airline lives on our own site. */
+export function airlineSite(
+  code: string | null,
+): { name: string; domain: string; checkin?: string } | null {
+  if (!code) return null;
+  if (code === PRACTICE_AIRLINE) {
+    const base = practiceBase();
+    return base
+      ? {
+          name: "Ability Practice Air",
+          domain: new URL(base).hostname,
+          checkin: `${base}/practice-air`,
+        }
+      : null;
+  }
+  return AIRLINES[code] ?? null;
+}
+
+/**
+ * Where this app is reachable from the internet (the browser runs elsewhere), or null.
+ * PRACTICE_AIR_URL is for trying it on a computer, through a tunnel to it.
+ */
+function practiceBase(): string | null {
+  const url =
+    process.env.PRACTICE_AIR_URL ||
+    process.env.PUBLIC_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : "");
+  try {
+    return url ? new URL(url).origin : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Arrival cards we file, on the government's own site only (both are free). */
 export const ARRIVAL_CARDS: Record<
@@ -169,7 +231,7 @@ interface LeavePlan {
   mode: "car" | "train" | null;
   minutes: number | null;
   other: RouteOption | null;
-  from: string;
+  from: string | null;
   /** When to be at the airport. */
   beAt: string;
   early: number;
@@ -189,7 +251,7 @@ export const airlineOf = (b: FlightBooking): string | null =>
   b.flightNumber?.split(" ")[0]?.toUpperCase() ?? null;
 
 function airlineName(b: FlightBooking, code: string | null) {
-  return (code && AIRLINES[code]?.name) || b.airline || code || "the airline";
+  return (code && airlineSite(code)?.name) || b.airline || code || "the airline";
 }
 
 const flightName = (b: FlightBooking) => b.flightNumber ?? b.airline ?? "your flight";
@@ -202,7 +264,7 @@ export function factsFor(b: FlightBooking): FlightFacts {
   return {
     international: !!(from && to && from.country !== to.country),
     airline: code,
-    airlineName: code ? (AIRLINES[code]?.name ?? b.airline) : b.airline,
+    airlineName: code ? (airlineSite(code)?.name ?? b.airline) : b.airline,
     fromUs: from?.country === "US",
     sixMonthCountry: to ? (SIX_MONTH_RULE[to.country] ?? null) : null,
     arriveOn: b.arriveAt?.slice(0, 10) ?? b.departAt?.slice(0, 10) ?? null,
@@ -589,7 +651,11 @@ function operatorOf(c: Ctx): string | null {
   const op = c.plan.checkin_result?.operator;
   if (op) {
     const code = Object.entries(AIRLINES).find(
-      ([k, v]) => k === op.toUpperCase() || v.name.toLowerCase() === op.toLowerCase(),
+      ([k, v]) =>
+        k === op.toUpperCase() ||
+        v.name.toLowerCase() === op.toLowerCase() ||
+        // "Operated by AirAsia Berhad", "Malaysia Airlines Berhad"
+        op.toLowerCase().startsWith(v.name.toLowerCase() + " "),
     )?.[0];
     if (code) return code;
   }
@@ -597,15 +663,14 @@ function operatorOf(c: Ctx): string | null {
 }
 
 function checkinSite(c: Ctx): string {
-  const code = operatorOf(c);
-  return code && AIRLINES[code]
-    ? AIRLINES[code].domain
-    : `${possessive(airlineName(c.b, code))} website`;
+  const site = airlineSite(operatorOf(c));
+  return site ? site.domain : `${possessive(airlineName(c.b, operatorOf(c)))} website`;
 }
 
 async function startCheckin(c: Ctx): Promise<Date> {
   const code = operatorOf(c);
-  const site = code ? AIRLINES[code]?.domain : undefined;
+  const airline = airlineSite(code);
+  const site = airline?.domain;
   const docs = await travelDocumentsForRun(c.deps.sql, c.deps.vaultKey, c.userId, null);
   const secrets = site ? documentSecrets(docs, code, [site]) : [];
   const chatId = await withUser(c.deps.sql, c.userId, mainChat);
@@ -619,7 +684,7 @@ async function startCheckin(c: Ctx): Promise<Date> {
       secrets.map((s) => s.alias),
       site ?? null,
     ),
-    startUrl: site ? `https://www.${site}/` : null,
+    startUrl: airline ? (airline.checkin ?? `https://www.${airline.domain}/`) : null,
     secrets,
     maxCostUsd: RUN_COST_USD,
   });
@@ -627,6 +692,7 @@ async function startCheckin(c: Ctx): Promise<Date> {
     checkin_status: "running",
     checkin_browser_id: session.id,
     checkin_tries: c.plan.checkin_tries + 1,
+    checkin_note: null,
   });
   return new Date(c.now.getTime() + 30000);
 }
@@ -715,7 +781,7 @@ export function checkinTask(c: Ctx, aliases: string[], site: string | null): str
     "- The person has told us themselves that they are not carrying any banned or dangerous items. You may confirm the airline's standard dangerous goods / restricted items statement for them. Don't confirm any other statement on their behalf: if the site asks for one, stop with NEEDS_INFO.",
     "",
     "Steps",
-    "1. Find the check-in page and look up the booking with the booking reference and last name (and first name if asked). Don't sign in unless the site requires it.",
+    "1. Find the check-in page and look up the booking with the booking reference and last name (and first name if asked). Don't sign in unless the site requires it. If the site can't find the booking, check that each field holds exactly the value above, with no extra spaces, and try once more before reporting NOT_FOUND.",
     "2. Decline every paid extra: upgrades, extra bags, priority boarding, insurance, paid seats, hotels, cars. Never enter payment details or buy anything.",
     "3. Fill in any details the site asks for from the passenger details above. If the person is already checked in, go straight to the boarding pass.",
     '4. Complete check-in, then get the boarding pass: download it (PDF, or the airline\'s mobile pass file) into outputs/. If there is no download, save the boarding pass page as a PDF into outputs/ named "boarding-pass.pdf".',
@@ -857,7 +923,9 @@ async function followCheckin(c: Ctx, depart: Date): Promise<Date | null> {
       depart,
       s.blocked
         ? `${checkinSite(c)} kept blocking my browser`
-        : "the airline's site didn't work for my browser",
+        : s.status === "failed" && !s.bu_run_id
+          ? "my browser couldn't start"
+          : "the airline's site didn't work for my browser",
     );
   }
   const found = readMarker(report);
@@ -1007,7 +1075,8 @@ async function retryCheckin(
   const at = new Date(c.now.getTime() + RETRY_MIN * MINUTE);
   const lastCall = depart.getTime() - BACKUP_BEFORE_H * HOUR;
   if (c.plan.checkin_tries < (notFound ? 2 : MAX_CHECKIN_TRIES) && at.getTime() < lastCall) {
-    await patch(c, { checkin_status: "scheduled", checkin_due_at: at });
+    // The card says why the last try didn't work until the next one starts.
+    await patch(c, { checkin_status: "scheduled", checkin_due_at: at, checkin_note: why });
     return at;
   }
   await backup(c, `I couldn't check you in: ${why}.`);
@@ -1329,7 +1398,6 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
     return leaveWatch(c, depart);
   if (now < start) return start;
   const from = leaveFrom(c);
-  if (!from) return null;
   // Big delays (an hour or more) move the plan later; early departures always move it earlier.
   let planned = depart;
   const liveAt = plan.live?.departAt ? new Date(plan.live.departAt) : null;
@@ -1349,7 +1417,7 @@ async function stepLeave(c: Ctx, depart: Date): Promise<Date | null> {
   if (fresh && prev) {
     car = prev.mode === "car" ? { mode: "car", minutes: prev.minutes! } : prev.other;
     train = prev.mode === "train" ? { mode: "train", minutes: prev.minutes! } : prev.other;
-  } else if (deps.routes.available && to) {
+  } else if (deps.routes.available && to && from) {
     const guess = new Date(beAt.getTime() - HOUR);
     const route = (m: "car" | "train") =>
       deps.routes.travel(m, from, { lat: to.lat, lon: to.lon }, guess).catch((err) => {
@@ -1427,7 +1495,7 @@ async function leaveWatch(c: Ctx, depart: Date): Promise<Date | null> {
   const { plan, now, deps, b } = c;
   const p = plan.leave_plan;
   const leaveBy = plan.leave_by ? new Date(plan.leave_by) : null;
-  if (!p || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_watched"))
+  if (!p?.from || !leaveBy || p.mode !== "car" || !p.minutes || plan.sent.includes("leave_watched"))
     return null;
   if (now >= leaveBy || !deps.routes.available) return null;
   if (now.getTime() < leaveBy.getTime() - 15 * MINUTE)
@@ -1640,7 +1708,7 @@ export async function flightViews(
         terminal: p.checkin_result?.terminal ?? null,
         mismatch: p.checkin_result?.mismatch ?? null,
         skipped: p.checkin_result?.skipped ?? [],
-        site: code && AIRLINES[code] ? AIRLINES[code].domain : null,
+        site: airlineSite(code)?.domain ?? null,
         boardingPass: file(p.boarding_pass_file_id),
         browser: browser(p.checkin_browser_id),
       },
@@ -1680,7 +1748,6 @@ export async function flightViews(
               : null,
           }
         : null,
-      needsHomeAddress: !data.profile.home_address,
     });
   }
   return out;

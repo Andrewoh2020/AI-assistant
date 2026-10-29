@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
@@ -90,7 +91,6 @@ export function AppShell({ chatId }: { chatId: string }) {
   const [settings, setSettings] = useState<"home" | "vault" | "connections" | null>(null);
   const [gmailResult, setGmailResult] = useState<GmailResult | null>(null);
   // On the day of a flight its trip card sits at the top of the Main chat.
-  const [todayFlight, setTodayFlight] = useState<FlightView | null>(null);
   // Back from Google's sign-in (connecting Gmail): open Settings where it left off.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
@@ -182,7 +182,6 @@ export function AppShell({ chatId }: { chatId: string }) {
     setAttachments([]);
     setPending(null);
     setPreview(null);
-    setTodayFlight(null);
     setDraft(drafts.get(chatId) ?? "");
     setUnread((prev) => {
       if (!prev.has(chatId)) return prev;
@@ -218,12 +217,6 @@ export function AppShell({ chatId }: { chatId: string }) {
         setSelected(lastAnswer ? { messageId: lastAnswer.id, n: null } : null);
         // A brand-new chat is ready to type in.
         if (data.messages.length === 0 && !data.activeRun) inputRef.current?.focus();
-        if (data.chat.kind === "main") {
-          api
-            .flights()
-            .then((r) => !cancelled && setTodayFlight(r.flights.find((f) => f.today) ?? null))
-            .catch(() => {});
-        }
       })
       .catch((err) => {
         if (!cancelled && !handleAuth(err))
@@ -323,29 +316,26 @@ export function AppShell({ chatId }: { chatId: string }) {
   // While nothing is being answered, look now and then for messages the assistant sent by itself
   // (a new trip card, "You're checked in") and keep trip cards current. Faster while a check-in
   // or arrival card is being done.
+  // Also from shortly before a check-in is due, so its browser shows up as soon as it starts.
   const flightBusy = messages.some(
     (m) =>
       m.flight &&
       (m.flight.checkin.status === "running" ||
+        (m.flight.checkin.status === "scheduled" && dueSoon(m.flight.checkin.opensAt)) ||
         m.flight.arrival?.status === "running" ||
         (m.flight.arrival?.status === "ready" && m.flight.arrival.confirmed)),
   );
-  const isMain = chat?.kind === "main";
   useEffect(() => {
     if (activeRunId || pending || !chat) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       try {
-        const [data, upcoming] = await Promise.all([
-          api.getChat(chatId),
-          isMain ? api.flights() : Promise.resolve(null),
-        ]);
+        const data = await api.getChat(chatId);
         if (stopped) return;
         // A reply someone started elsewhere (another tab) is picked up too.
         if (data.activeRun) setActiveRun(data.activeRun);
         setMessages(data.messages);
-        if (upcoming) setTodayFlight(upcoming.flights.find((f) => f.today) ?? null);
       } catch (err) {
         if (handleAuth(err)) return;
       }
@@ -356,7 +346,7 @@ export function AppShell({ chatId }: { chatId: string }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [chatId, chat, isMain, activeRunId, pending, flightBusy, handleAuth]);
+  }, [chatId, chat, activeRunId, pending, flightBusy, handleAuth]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
@@ -405,7 +395,7 @@ export function AppShell({ chatId }: { chatId: string }) {
     }
   }
 
-  async function attach(list: FileList | null) {
+  async function attach(list: FileList | File[] | null) {
     const picked = [...(list ?? [])];
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (!picked.length) return;
@@ -422,6 +412,21 @@ export function AppShell({ chatId }: { chatId: string }) {
         setUploading((n) => n - 1);
       }
     }
+  }
+
+  // A copied image or file pasted into the message box is attached, like one dropped on it.
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = [...e.clipboardData.files];
+    if (!files.length) return;
+    e.preventDefault();
+    const stamp = new Date().toISOString().slice(0, 19).replace("T", " ").replaceAll(":", ".");
+    // A copied image has no name of its own ("image.png"), so give it one people can recognise.
+    const named = files.map((f) =>
+      /^image\.\w+$/.test(f.name)
+        ? new File([f], `Pasted image ${stamp}.${f.name.split(".").pop()}`, { type: f.type })
+        : f,
+    );
+    void attach(named);
   }
 
   // Dragging files over the window turns the message box into a drop target, like Muse.
@@ -575,7 +580,6 @@ export function AppShell({ chatId }: { chatId: string }) {
     ...(activeRun?.browsers ?? []),
     ...endedRuns.flatMap((r) => r.browsers),
     ...messages.flatMap((m) => m.browsers),
-    ...flightBrowsers(todayFlight),
     ...messages.flatMap((m) => flightBrowsers(m.flight)),
   ];
   const previewBrowser = preview ? allBrowsers.find((b) => b.id === preview.id) : undefined;
@@ -594,20 +598,17 @@ export function AppShell({ chatId }: { chatId: string }) {
           : f.arrival,
     });
     setMessages((prev) => prev.map((m) => (m.flight ? { ...m, flight: inFlight(m.flight) } : m)));
-    setTodayFlight((f) => (f ? inFlight(f) : f));
   }
 
   function updateFlight(view: FlightView) {
     setMessages((prev) => prev.map((m) => (m.flight?.id === view.id ? { ...m, flight: view } : m)));
-    setTodayFlight((f) => (f?.id === view.id ? view : f));
   }
 
-  function flightCard(f: FlightView, pinned = false) {
+  function flightCard(f: FlightView) {
     return (
       <FlightCard
-        key={`${pinned ? "pin" : "msg"}-${f.id}`}
+        key={f.id}
         flight={f}
-        pinned={pinned}
         onChange={updateFlight}
         browserCard={(b) => browserCards([b])}
       />
@@ -641,7 +642,11 @@ export function AppShell({ chatId }: { chatId: string }) {
   const sideChats = chats.filter((c) => c.kind !== "main" && !c.archived);
   const archivedChats = chats.filter((c) => c.archived);
   const runByUserMessage = new Map(endedRuns.map((r) => [r.id, r]));
+  // A flight's trip card shows once, on its newest message (asking to check in brings it down).
+  const newestCard = new Map(messages.flatMap((m) => (m.flight ? [[m.flight.id, m.id]] : [])));
   const working = !!activeRunId || !!pending;
+  // A check-in or arrival card being done in the background shows at the bottom like a reply.
+  const background = working ? null : backgroundJob(messages);
   const isEmpty = messages.length === 0 && !working;
 
   const q = query.trim().toLowerCase();
@@ -882,7 +887,6 @@ export function AppShell({ chatId }: { chatId: string }) {
               Couldn&apos;t open this chat: {loadError}
             </p>
           )}
-          {todayFlight && <div className="today-pin">{flightCard(todayFlight, true)}</div>}
           {isEmpty && !loadError && chat && (
             <div className="empty">
               <h2>What would you like to know?</h2>
@@ -915,8 +919,7 @@ export function AppShell({ chatId }: { chatId: string }) {
                     />
                   )}
                 </article>
-                {/* On the day the card is pinned at the top instead. */}
-                {m.flight && m.flight.id !== todayFlight?.id && flightCard(m.flight)}
+                {m.flight && newestCard.get(m.flight.id) === m.id && flightCard(m.flight)}
                 {m.card === "travel" && <TravelCard />}
                 {m.card === "gmail" && <GmailCard chatId={chatId} />}
                 {ended && browserCards(ended.browsers)}
@@ -954,11 +957,16 @@ export function AppShell({ chatId }: { chatId: string }) {
           {working && activeRun && activeRun.browsers.length > 0 && (
             <div>{browserCards(activeRun.browsers)}</div>
           )}
-          {working && (
-            <div className="progress" role="status">
-              <span className="dots" aria-hidden="true" />
-              <span>{waitingFor ?? `${activeRun?.statusLine || "Thinking"}…`}</span>
-            </div>
+          {working && <Progress text={waitingFor ?? `${activeRun?.statusLine || "Thinking"}…`} />}
+          {background && (
+            <Progress
+              text={background.text}
+              onWatch={
+                background.browser
+                  ? () => setPreview({ id: background.browser!.id, takeControl: false })
+                  : undefined
+              }
+            />
           )}
           <div ref={bottomRef} />
         </div>
@@ -1014,6 +1022,7 @@ export function AppShell({ chatId }: { chatId: string }) {
               value={draft}
               onChange={(e) => changeDraft(e.target.value)}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               placeholder="Message"
               rows={1}
               maxLength={8000}
@@ -1479,4 +1488,56 @@ function PinIcon() {
       <path d="M9 3h6l-1 6 3 3v2h-4v6l-1 1-1-1v-6H7v-2l3-3-1-6Z" fill="currentColor" />
     </svg>
   );
+}
+
+/** The "someone is typing" bubble, with what the assistant is doing next to it. */
+function Progress({ text, onWatch }: { text: string; onWatch?: () => void }) {
+  return (
+    <div className="progress" role="status">
+      <span className="typing" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="progress-text">{text}</span>
+      {onWatch && (
+        <button type="button" className="bsign-alt" onClick={onWatch}>
+          Watch
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Within a couple of minutes of this time (an ISO instant), either side. */
+function dueSoon(at: string | null): boolean {
+  if (!at) return false;
+  const gap = Date.parse(at) - Date.now();
+  return gap < 2 * 60_000 && gap > -5 * 60_000;
+}
+
+/** A check-in or arrival card the app is doing by itself right now, newest first. */
+function backgroundJob(
+  messages: MessageView[],
+): { text: string; browser: BrowserView | null } | null {
+  for (const m of [...messages].reverse()) {
+    const f = m.flight;
+    if (!f) continue;
+    const name = f.flightNumber ?? f.airlineName;
+    const step = (b: BrowserView | null | undefined) =>
+      b?.step && !/^[A-Z_]{5,}\b/.test(b.step) ? `: ${b.step.slice(0, 140)}` : "…";
+    if (f.checkin.status === "running") {
+      return {
+        text: `Checking you in for ${name}${step(f.checkin.browser)}`,
+        browser: f.checkin.browser ?? null,
+      };
+    }
+    if (f.arrival?.status === "running") {
+      return {
+        text: `Filling in your arrival card${step(f.arrival.browser)}`,
+        browser: f.arrival.browser ?? null,
+      };
+    }
+  }
+  return null;
 }

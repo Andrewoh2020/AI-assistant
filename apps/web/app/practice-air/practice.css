@@ -1,0 +1,383 @@
+/* Ability Practice Air: a budget airline's look (red and white), kept apart from the app's own. */
+.pa {
+  --pa-red: #d71920;
+  --pa-red-dark: #a8121a;
+  --pa-ink: #1d1d1f;
+  --pa-muted: #6b6b70;
+  --pa-line: #e3e3e6;
+  --pa-bg: #f5f5f7;
+  min-height: 100vh;
+  background: var(--pa-bg);
+  color: var(--pa-ink);
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+}
+.pa *,
+.pa *::before,
+.pa *::after {
+  box-sizing: border-box;
+}
+.pa-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 24px;
+  background: var(--pa-red);
+  color: #fff;
+}
+.pa-header a {
+  color: #fff;
+  text-decoration: none;
+}
+.pa-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 22px;
+  font-weight: 800;
+  font-style: italic;
+}
+.pa-logo-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--pa-red);
+  font-style: normal;
+  font-size: 16px;
+}
+.pa-nav {
+  display: flex;
+  gap: 20px;
+  font-weight: 600;
+}
+.pa-notice {
+  padding: 8px 24px;
+  background: #fff4d6;
+  font-size: 13px;
+  text-align: center;
+}
+.pa-main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 140px;
+}
+.pa-footer {
+  padding: 24px;
+  color: var(--pa-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.pa h1,
+.pa h2 {
+  margin: 0 0 12px;
+}
+.pa-title {
+  font-size: 28px;
+}
+.pa-hero h1 {
+  font-size: 34px;
+}
+.pa-card {
+  margin-bottom: 16px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+.pa-form {
+  display: grid;
+  gap: 14px;
+}
+.pa-field {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-weight: 600;
+  flex: 1;
+}
+.pa-field legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+.pa input:not([type="checkbox"]):not([type="radio"]),
+.pa select {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--pa-line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--pa-ink);
+  font: inherit;
+  font-weight: 400;
+}
+.pa-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.pa-row > .pa-field {
+  min-width: 200px;
+}
+.pa-btn,
+.pa a.pa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--pa-red);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pa-btn:hover {
+  background: var(--pa-red-dark);
+}
+.pa-btn:disabled {
+  background: #c9c9cc;
+  cursor: not-allowed;
+}
+.pa-btn-ghost {
+  border: 1px solid var(--pa-red);
+  background: #fff;
+  color: var(--pa-red);
+}
+.pa-btn-ghost:hover {
+  background: #fff0f0;
+}
+.pa-muted {
+  color: var(--pa-muted);
+  font-weight: 400;
+}
+.pa-error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fdecec;
+  color: var(--pa-red-dark);
+}
+.pa-form .pa-error {
+  margin: 0;
+}
+.pa-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 20px;
+}
+.pa-tab {
+  padding: 10px 18px;
+  border-radius: 10px 10px 0 0;
+  background: #e9e9ec;
+  color: var(--pa-ink);
+  font-weight: 700;
+  text-decoration: none;
+}
+.pa-tab-on {
+  background: #fff;
+}
+.pa-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  border-top-left-radius: 0;
+}
+.pa-search label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 150px;
+  font-weight: 600;
+}
+.pa-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.pa-tile {
+  display: grid;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+}
+.pa-modal-back {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.5);
+}
+.pa-modal {
+  position: relative;
+  max-width: 380px;
+  padding: 28px;
+  border-radius: 14px;
+  background: #fff;
+  text-align: center;
+}
+.pa-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  border: 0;
+  background: none;
+  font-size: 26px;
+  cursor: pointer;
+}
+.pa-cookies {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.18);
+}
+.pa-cookies p {
+  flex: 1;
+  min-width: 220px;
+  margin: 0;
+}
+.pa-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 16px;
+  padding: 0;
+  color: var(--pa-muted);
+  font-weight: 600;
+  list-style: none;
+}
+.pa-step-on {
+  color: var(--pa-red);
+}
+.pa-flight {
+  display: grid;
+  gap: 4px;
+}
+.pa-route {
+  font-size: 18px;
+  font-weight: 700;
+}
+.pa-radio,
+.pa-check {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-weight: 400;
+}
+.pa-radio input,
+.pa-check input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--pa-red);
+}
+.pa-extra {
+  padding: 12px;
+  border: 1px solid var(--pa-line);
+  border-radius: 10px;
+}
+.pa-list {
+  margin: 0;
+  padding-left: 20px;
+}
+.pa-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+}
+.pa-legend span {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.pa-legend .pa-seat {
+  width: 16px;
+  height: 16px;
+}
+.pa-map {
+  display: grid;
+  gap: 4px;
+  justify-content: center;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--pa-line);
+  border-radius: 10px;
+}
+.pa-map-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.pa-map-n {
+  width: 24px;
+  color: var(--pa-muted);
+  font-size: 12px;
+  text-align: right;
+}
+.pa-seat {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pa-aisle {
+  margin-right: 18px;
+}
+.pa-hot {
+  background: #ffd2d4;
+}
+.pa-std {
+  background: #dce8ff;
+}
+.pa-free {
+  background: #d8f3dc;
+}
+.pa-taken {
+  background: #d4d4d8;
+  color: #9a9aa0;
+  cursor: not-allowed;
+}
+.pa-seat-on {
+  outline: 3px solid var(--pa-ink);
+}
+.pa-pass {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  border: 2px dashed var(--pa-line);
+  border-radius: 10px;
+}
+.pa-pass div {
+  display: grid;
+  gap: 2px;
+}

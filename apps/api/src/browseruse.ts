@@ -96,12 +96,20 @@ export class BrowserUseHttp implements BrowserUse {
     if (this.apiKey) headers["X-Browser-Use-API-Key"] = this.apiKey;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${this.base}/api/v4${path}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`${this.base}/api/v4${path}`, {
+          method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (err) {
+        // A dropped connection: try reads again. Not writes, which may have gone through.
+        if (method !== "GET" || attempt >= retries) throw err;
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        continue;
+      }
       const text = await res.text();
       if (res.ok) return (text ? JSON.parse(text) : {}) as T;
       const retryable = res.status === 429 || res.status >= 500;

@@ -88,6 +88,7 @@ import {
   vaultKeyFrom,
 } from "./vault.js";
 import { MANAGERS, readExport } from "./vault-import.js";
+import { registerPractice } from "./practice.js";
 
 const COOKIE = "aia_session";
 /** Set by an invite link (/join/<code>); lets a new person create an account. */
@@ -1183,15 +1184,15 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { documents: await revealDocuments(sql, vaultKey, s.userId) };
   });
 
-  // The scheduler: every flight that is due, for everyone, plus new booking emails.
+  // The scheduler: every flight that is due, for everyone, plus new booking emails (with `mail`).
   let ticking = false;
-  const tick = async () => {
+  const tick = async (mail = true) => {
     if (ticking) return;
     ticking = true;
     try {
-      const users = await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(
-        () => [],
-      );
+      const users = mail
+        ? await sql<{ user_id: string }[]>`SELECT * FROM app_gmail_users(${50})`.catch(() => [])
+        : [];
       for (const u of users) {
         await syncIfDue(gmailDeps, u.user_id);
         await planFlights(flightDeps, u.user_id).catch((err) => app.log.error(err));
@@ -1202,6 +1203,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
   };
 
+  // Ability Practice Air, the pretend airline for trying check-in without a real flight.
+  registerPractice(app, { sql, secret: config.sessionSecret, vaultKey, now: deps.now });
+
   // Vercel Cron calls this with "Authorization: Bearer <CRON_SECRET>".
   app.get("/cron/flights", async (req, reply) => {
     const want = Buffer.from(`Bearer ${config.cronSecret}`);
@@ -1209,28 +1213,36 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!config.cronSecret || got.length !== want.length || !timingSafeEqual(got, want)) {
       return reply.code(401).send({ error: "Not allowed." });
     }
-    await tick();
+    // Called every 5 minutes, so a check-in moves on with the app closed; a call with no flight
+    // due makes no paid calls. Booking emails are looked for once an hour (and when the app opens).
+    await tick((deps.now?.() ?? new Date()).getUTCMinutes() < 5);
     return { ok: true };
   });
 
-  // On a computer that stays on: wake when the next flight needs something, and at least every
-  // `scheduleEveryMs` to look for new booking emails. A wake-up with nothing due costs nothing.
+  // On a computer that stays on: wake when the next flight needs something, and at least once a
+  // minute (a flight that gets due meanwhile, like one whose details were just added, isn't left
+  // waiting). New booking emails are looked for every `scheduleEveryMs`. A wake-up with nothing
+  // due is one database query and no paid calls.
   if (deps.scheduleEveryMs) {
     const most = deps.scheduleEveryMs;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
+    let mailedAt = 0;
     const arm = async () => {
       if (closed) return;
-      let wait = most;
+      let wait = Math.min(most, 60_000);
       try {
         const [row] = await sql<{ at: Date | null }[]>`SELECT app_next_flight_due() AS at`;
         const now = (deps.now?.() ?? new Date()).getTime();
-        if (row?.at) wait = Math.min(most, Math.max(5000, new Date(row.at).getTime() - now));
+        if (row?.at) wait = Math.min(wait, Math.max(5000, new Date(row.at).getTime() - now));
       } catch (err) {
         app.log.error(err);
       }
       timer = setTimeout(() => {
-        void tick()
+        const now = (deps.now?.() ?? new Date()).getTime();
+        const mail = now - mailedAt >= most;
+        if (mail) mailedAt = now;
+        void tick(mail)
           .catch((err) => app.log.error(err))
           .finally(() => void arm());
       }, wait);

@@ -19,13 +19,10 @@ import { FileChip } from "./Files";
  */
 export function FlightCard({
   flight,
-  pinned = false,
   onChange,
   browserCard,
 }: {
   flight: FlightView;
-  /** Shown at the top of the Main chat on the day. */
-  pinned?: boolean;
   onChange: (view: FlightView) => void;
   /** Renders the check-in or arrival card's browser, like any other browser card. */
   browserCard: (b: BrowserView) => ReactNode;
@@ -62,7 +59,7 @@ export function FlightCard({
 
   return (
     <section
-      className={`trip-card ${pinned ? "is-pinned" : ""} ${f.live?.status === "cancelled" ? "is-cancelled" : ""}`}
+      className={`trip-card ${f.live?.status === "cancelled" ? "is-cancelled" : ""}`}
       aria-label={`Trip card: ${f.flightNumber ?? "flight"} ${f.fromCode ?? ""} to ${f.toCode ?? ""}`}
     >
       <Header flight={f} />
@@ -228,7 +225,9 @@ function CheckinLine({ flight: f }: { flight: FlightView }) {
     case "scheduled":
       text = missing
         ? `I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}). I just need a few details first.`
-        : `All set. I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}) and send your boarding pass.`;
+        : ci.note
+          ? `My last try didn't work: ${ci.note}. I'll try again by myself at ${viewerWhen(ci.opensAt)}.`
+          : `All set. I'll check you in by myself when check-in opens (${viewerWhen(ci.opensAt)}) and send your boarding pass.`;
       break;
     case "waiting_for_you":
       text = ci.question
@@ -354,9 +353,7 @@ function LeaveLine({ flight: f }: { flight: FlightView }) {
       ? `Train · ${l.minutes} min${l.otherMode ? ` (car ${l.otherMinutes} min)` : ""}`
       : l.mode === "car"
         ? `Car · ${l.minutes} min in traffic${l.otherMode ? ` (train ${l.otherMinutes} min)` : ""}`
-        : f.needsHomeAddress
-          ? "Add your home address below to get live traffic."
-          : "About an hour to get there";
+        : "About an hour to get there";
   return (
     <div className="trip-section trip-leave">
       <b>Leave by {localClock(l.leaveLocal)}</b>
@@ -421,7 +418,6 @@ function PrepForm({
     copy("passportNumber", "passportNumber");
     copy("passportExpiry", "passportExpiry");
     // Left empty: not asked again (the leave reminder then allows an hour to get there).
-    if (need.has("homeAddress")) out.homeAddress = v.homeAddress?.trim() ?? "";
     // Optional ones are asked once: left empty means "I don't have one".
     if (need.has("knownTraveler")) out.knownTravelerNumber = v.knownTravelerNumber?.trim() || null;
     if (need.has("frequentFlyer")) out.frequentFlyerNumber = v.frequentFlyerNumber?.trim() || null;
@@ -630,17 +626,6 @@ function PrepForm({
             Away from the washrooms
           </label>
         </fieldset>
-      )}
-      {need.has("homeAddress") && (
-        <Field label="Where you leave for the airport from">
-          <input
-            placeholder="Home address (optional)"
-            value={v.homeAddress ?? ""}
-            onChange={(e) => set("homeAddress", e.target.value)}
-            autoComplete="street-address"
-            maxLength={300}
-          />
-        </Field>
       )}
       {!f.prep.noBannedItems && (
         <label className="bsign-check trip-banned">

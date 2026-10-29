@@ -337,8 +337,8 @@ describe("assistant profile version", () => {
       .digest("hex")
       .slice(0, 16);
     expect({ version: PROFILE_VERSION, fingerprint }).toEqual({
-      version: "main-2026-10-25d",
-      fingerprint: "78df49d00b9e08db",
+      version: "main-2026-10-29b",
+      fingerprint: "e86df7532e0f6c3d",
     });
   });
 });

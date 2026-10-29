@@ -5,7 +5,13 @@ import { startBrowse } from "./browser.js";
 import type { BrowserUse } from "./browseruse.js";
 import { READ_CHUNK_CHARS } from "./files.js";
 import { airport } from "./airports.js";
-import { flightViews, planFlights, upcomingFlightIds } from "./flights.js";
+import {
+  afterPrep,
+  flightViews,
+  planFlights,
+  upcomingFlightIds,
+  type FlightDeps,
+} from "./flights.js";
 import { fileBooking, tripsText, upcomingTrips } from "./gmail.js";
 import { decide, type Resolver } from "./policy.js";
 import { flightLine } from "./share.js";
@@ -330,6 +336,66 @@ export async function runTool(
       };
     }
 
+    if (call.name === "check_in") {
+      // The flight they mean, by its booking reference or flight number, among their upcoming ones.
+      const key = (v: unknown) =>
+        typeof v === "string" ? v.replace(/\s+/g, "").toUpperCase() : "";
+      const wanted = key(args.booking);
+      const find = async () =>
+        [
+          ...(
+            await flightViews(
+              ctx.sql,
+              ctx.userId,
+              await upcomingFlightIds(ctx.sql, ctx.userId),
+              deps.secret,
+              {},
+            )
+          ).values(),
+        ].find((f) => wanted && (key(f.confirmation) === wanted || key(f.flightNumber) === wanted));
+      let flight = await find();
+      if (!flight) {
+        await finishToolCall(ctx, toolCallId, {
+          status: "failed",
+          decision: "allow",
+          reason: "no upcoming flight matches",
+        });
+        return {
+          error:
+            "No upcoming flight has that booking reference or flight number. Call list_trips to see their flights.",
+        };
+      }
+      // Asking to be checked in turns automatic check-in back on if they had turned it off.
+      if (!flight.checkin.auto) {
+        await afterPrep({ sql: ctx.sql } as FlightDeps, ctx.userId, flight.id, {
+          autoCheckin: true,
+        });
+        flight = (await find()) ?? flight;
+      }
+      // The card comes down to the reply; the chat shows each flight's card only once, at the latest.
+      const parts = [
+        {
+          type: "text",
+          text: `Your ${flight.flightNumber ?? "flight"} to ${flight.toCity ?? flight.toCode ?? "your destination"}.`,
+          citations: [],
+        },
+        { type: "card", card: { kind: "flight", tripItemId: flight.id } },
+      ];
+      await withUser(
+        ctx.sql,
+        ctx.userId,
+        (tx) => tx`
+          INSERT INTO messages (user_id, chat_id, role, parts, origin)
+          SELECT ${ctx.userId}, chat_id, 'assistant', ${tx.json(parts as never)}, 'proactive'
+          FROM runs WHERE id = ${ctx.runId}`,
+      );
+      await finishToolCall(ctx, toolCallId, { status: "succeeded", decision: "allow" });
+      return {
+        shown: "This flight's trip card is now just above your reply.",
+        trip_card: flightLine(flight),
+      };
+    }
+
     if (call.name === "show_travel_details") {
       await postChatCard(
         ctx,
@@ -528,6 +594,7 @@ export function statusLineFor(calls: TravilaToolCall[]): string {
     return "Saving your booking";
   if (calls.some((c) => c.name === "save_travel_details")) return "Saving your travel details";
   if (calls.some((c) => c.name === "show_travel_details")) return "Opening your travel details";
+  if (calls.some((c) => c.name === "check_in")) return "Finding your flight";
   if (calls.some((c) => c.name === "offer_gmail")) return "Working";
   return "Working";
 }

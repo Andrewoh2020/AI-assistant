@@ -299,7 +299,9 @@ export async function startFlightBrowse(
       )) ?? session!
     );
   } catch (err) {
-    console.error(`flight browse ${session!.id}: start failed (${(err as Error).name})`);
+    const e = err as Error & { cause?: { code?: string; name?: string } };
+    const cause = e.cause ? ` (${e.cause.code ?? e.cause.name})` : "";
+    console.error(`flight browse ${session!.id}: start failed: ${e.name}: ${e.message}${cause}`);
     return (
       (await update(deps, ctx, session!.id, {
         status: "failed",
